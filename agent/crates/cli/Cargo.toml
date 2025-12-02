@@ -7,3 +7,5 @@ edition = "2024"
 reversi-core = { path = "../core" }
 reversi-mcts = { path = "../mcts" }
 reversi-nn   = { path = "../nn" }
+tch = "0.22.0"
+anyhow = "1.0.100"

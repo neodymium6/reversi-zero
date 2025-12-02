@@ -7,7 +7,11 @@ authors = [
     { name = "neodymium6", email = "104201402+neodymium6@users.noreply.github.com" }
 ]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "numpy>=2.2.6",
+    "setuptools>=80.9.0",
+    "torch==2.9.0",
+]
 
 [project.scripts]
 trainer = "reversi_zero_trainer:main"
