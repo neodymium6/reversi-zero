@@ -1,9 +1,8 @@
+use reversi_core::Board;
 use reversi_nn::NnModel;
-use tch::{Cuda, Device, IndexOp, Kind, Tensor};
+use tch::{Device, IndexOp};
 
 fn main() -> anyhow::Result<()> {
-    println!("tch cuda available: {}", Cuda::is_available());
-    println!("tch cuda device count: {}", Cuda::device_count());
     let model_path = "../models/ts/latest.pt";
 
     let device = Device::cuda_if_available();
@@ -12,7 +11,9 @@ fn main() -> anyhow::Result<()> {
     println!("Loading TorchScript model from {:?}...", model_path);
     let model = NnModel::load(model_path, device)?;
 
-    let x = Tensor::zeros(&[1, 3, 8, 8], (Kind::Float, Device::cuda_if_available()));
+    let board = Board::new();
+    let board_tensor = board.to_tensor();
+    let x = board_tensor.unsqueeze(0).to_device(device);
 
     let (policy, value) = model.forward(&x)?;
 
