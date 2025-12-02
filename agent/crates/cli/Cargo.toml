@@ -1,0 +1,9 @@
+[package]
+name = "reversi-agent-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reversi-core = { path = "../core" }
+reversi-mcts = { path = "../mcts" }
+reversi-nn   = { path = "../nn" }
