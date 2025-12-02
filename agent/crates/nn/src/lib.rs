@@ -1,14 +1,14 @@
 use std::path::Path;
 
-use tch::{CModule, IValue, Tensor};
+use tch::{CModule, Device, IValue, Tensor};
 
 pub struct NnModel {
     module: CModule,
 }
 
 impl NnModel {
-    pub fn load<P: AsRef<Path>>(path: P) -> tch::Result<Self> {
-        let module = CModule::load(path)?;
+    pub fn load<P: AsRef<Path>>(path: P, device: Device) -> tch::Result<Self> {
+        let module = CModule::load_on_device(path, device)?;
         Ok(Self { module })
     }
 
