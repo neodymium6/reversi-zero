@@ -1,0 +1,17 @@
+[project]
+name = "reversi-zero-trainer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "neodymium6", email = "104201402+neodymium6@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+trainer = "reversi_zero_trainer:main"
+
+[build-system]
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
