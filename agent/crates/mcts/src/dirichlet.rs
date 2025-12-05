@@ -28,6 +28,11 @@ pub fn add_dirichlet_noise_to_root(
         return Ok(());
     }
 
+    if n == 1 {
+        // With only one child, no need to add noise (prior stays at 1.0)
+        return Ok(());
+    }
+
     // Sample from Dirichlet distribution
     let alpha_vec = vec![config.dirichlet_alpha as f64; n];
     let dirichlet =

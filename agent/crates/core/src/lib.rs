@@ -121,3 +121,11 @@ impl Clone for Board {
         }
     }
 }
+
+impl std::fmt::Debug for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Board")
+            .field("turn", &self.get_turn())
+            .finish()
+    }
+}

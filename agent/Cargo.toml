@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/mcts",
     "crates/nn",
+    "crates/selfplay",
     "crates/cli",
 ]
 

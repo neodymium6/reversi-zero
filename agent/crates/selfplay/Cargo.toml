@@ -1,0 +1,14 @@
+[package]
+name = "reversi-selfplay"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reversi-core = { path = "../core" }
+reversi-mcts = { path = "../mcts" }
+reversi-nn = { path = "../nn" }
+tch = "0.22.0"
+ndarray = "0.16"
+ndarray-npy = "0.9"
+anyhow = "1.0"
+thiserror = "1.0"
