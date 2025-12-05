@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+reversi-core = { path = "../core" }
+reversi-nn = { path = "../nn" }
+tch = "0.22.0"
+rand = "0.8"
+rand_distr = "0.4"
+anyhow = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+approx = "0.5"

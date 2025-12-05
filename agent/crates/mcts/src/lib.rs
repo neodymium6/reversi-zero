@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+// Module declarations
+mod backup;
+mod config;
+mod dirichlet;
+mod error;
+mod evaluation;
+mod expansion;
+mod mcts;
+mod search_result;
+mod selection;
+mod tree;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Public exports
+pub use config::MctsConfig;
+pub use error::{MctsError, Result};
+pub use evaluation::PolicyValueModel;
+pub use mcts::Mcts;
+pub use search_result::SearchResult;

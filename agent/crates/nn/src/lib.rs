@@ -4,12 +4,17 @@ use tch::{CModule, Device, IValue, Tensor};
 
 pub struct NnModel {
     module: CModule,
+    device: Device,
 }
 
 impl NnModel {
     pub fn load<P: AsRef<Path>>(path: P, device: Device) -> tch::Result<Self> {
         let module = CModule::load_on_device(path, device)?;
-        Ok(Self { module })
+        Ok(Self { module, device })
+    }
+
+    pub fn device(&self) -> Device {
+        self.device
     }
 
     pub fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
