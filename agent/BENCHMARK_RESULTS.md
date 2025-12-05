@@ -1,39 +1,29 @@
-# Selfplay Benchmark Results
+# Selfplay Benchmark Results (2025-12-06)
 
-**Date:** 2025-12-06
-**Hardware:** CPU
-**Model:** `models/ts/latest.pt`
-**Samples:** 100 iterations per configuration
+Model: `models/ts/latest.pt`
+Command: `cargo bench -p reversi-selfplay --bench selfplay_bench` (bench.rs defaults)
 
-## Results
+## single_game (CPU, sims = 1/10/30)
 
-| MCTS Simulations | Mean Time | Median Time | Std Dev | 95% CI Lower | 95% CI Upper |
-|-----------------|-----------|-------------|---------|--------------|--------------|
-| 1               | 11.17 ms  | 10.69 ms    | 1.35 ms | 10.90 ms     | 11.43 ms     |
-| 10              | 56.71 ms  | 54.86 ms    | 5.88 ms | 55.58 ms     | 57.90 ms     |
-| 30              | 154.78 ms | 153.29 ms   | 11.11 ms| 152.64 ms    | 156.97 ms    |
+| MCTS Simulations | Median Time |
+|------------------|-------------|
+| 1                | ~9.79 ms    |
+| 10               | ~53.12 ms   |
+| 30               | ~150.60 ms  |
 
-## Performance Analysis
+- `bench_single_game` uses `Device::Cpu`.
+- Criterion default samples (100); some warmup/sample time warnings are expected.
 
-### Scaling
+## multi_game (4 games, concurrency = 4, sims = 10, batch_size = 4, timeout = 1ms)
 
-- **1 → 10 simulations**: 5.08× slower
-- **10 → 30 simulations**: 2.73× slower
-- **1 → 30 simulations**: 13.86× slower
+| Mode           | Total Time (4 games) | Per-Game Time | Notes                        |
+|----------------|----------------------|---------------|------------------------------|
+| Sequential     | ~286.3 ms            | ~71.6 ms      | Raw model, batch size = 1    |
+| Parallel (4x)  | ~134.2 ms            | ~33.5 ms      | Shared batching, bs=4, 1 ms  |
 
-Roughly linear scaling with simulation count.
+- `bench_multi_game_parallel` uses `Device::cuda_if_available` (GPU in this run).
+- Sample count follows Criterion defaults (warnings may reduce samples/adjust target time).
 
-### Throughput
-
-| Simulations | Games/sec | Games/min | Games/hour |
-|------------|-----------|-----------|------------|
-| 1          | 89.5      | 5,370     | 322,200    |
-| 10         | 17.6      | 1,058     | 63,480     |
-| 30         | 6.5       | 387       | 23,220     |
-
-### Production Estimate (800 simulations)
-
-- Time per game: ~4.13 seconds
-- Throughput: ~0.24 games/second
-- 100 games: ~6.9 minutes
-- 1,000 games: ~1.15 hours
+Notes:
+- Parallel + batching roughly halves per-game time for 4 concurrent games at sims=10 (default bench.rs settings).
+- For light models and low simulation counts, overhead can dominate; re-measure under heavier loads (higher sims or heavier model) for production-like scenarios.

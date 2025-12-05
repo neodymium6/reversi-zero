@@ -1,5 +1,6 @@
 // Module declarations
 mod backup;
+mod batching;
 mod config;
 mod dirichlet;
 mod error;
@@ -11,6 +12,7 @@ mod selection;
 mod tree;
 
 // Public exports
+pub use batching::BatchingModel;
 pub use config::MctsConfig;
 pub use error::{MctsError, Result};
 pub use evaluation::PolicyValueModel;

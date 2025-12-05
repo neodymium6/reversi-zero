@@ -10,3 +10,4 @@ reversi-nn   = { path = "../nn" }
 reversi-selfplay = { path = "../selfplay" }
 tch = "0.22.0"
 anyhow = "1.0.100"
+rayon = "1.10"

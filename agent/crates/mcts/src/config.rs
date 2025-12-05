@@ -4,6 +4,12 @@ pub struct MctsConfig {
     /// Number of simulations to run
     pub num_simulations: u32,
 
+    /// Maximum number of leaf evaluations to batch per forward pass
+    pub batch_size: u32,
+
+    /// Maximum time (ms) to wait before flushing a partial batch
+    pub batch_timeout_ms: u64,
+
     /// PUCT exploration constant (typically 1.0-5.0)
     pub c_puct: f32,
 
@@ -29,6 +35,18 @@ impl MctsConfig {
     /// Set number of simulations
     pub fn with_simulations(mut self, n: u32) -> Self {
         self.num_simulations = n;
+        self
+    }
+
+    /// Set maximum batch size for neural network inference
+    pub fn with_batch_size(mut self, batch_size: u32) -> Self {
+        self.batch_size = batch_size.max(1);
+        self
+    }
+
+    /// Set maximum wait time for forming a batch (milliseconds)
+    pub fn with_batch_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.batch_timeout_ms = timeout_ms;
         self
     }
 
@@ -63,6 +81,8 @@ impl Default for MctsConfig {
     fn default() -> Self {
         Self {
             num_simulations: 800,
+            batch_size: 1,
+            batch_timeout_ms: 2,
             c_puct: 1.5,
             add_dirichlet_noise: false,
             dirichlet_alpha: 0.3,
@@ -80,6 +100,8 @@ mod tests {
     fn test_default_config() {
         let config = MctsConfig::default();
         assert_eq!(config.num_simulations, 800);
+        assert_eq!(config.batch_size, 1);
+        assert_eq!(config.batch_timeout_ms, 2);
         assert_eq!(config.c_puct, 1.5);
         assert!(!config.add_dirichlet_noise);
     }
@@ -88,11 +110,15 @@ mod tests {
     fn test_builder_pattern() {
         let config = MctsConfig::default()
             .with_simulations(1000)
+            .with_batch_size(4)
+            .with_batch_timeout_ms(5)
             .with_c_puct(2.0)
             .with_temperature(0.5)
             .with_dirichlet_noise(0.25, 0.3);
 
         assert_eq!(config.num_simulations, 1000);
+        assert_eq!(config.batch_size, 4);
+        assert_eq!(config.batch_timeout_ms, 5);
         assert_eq!(config.c_puct, 2.0);
         assert_eq!(config.temperature, 0.5);
         assert!(config.add_dirichlet_noise);
