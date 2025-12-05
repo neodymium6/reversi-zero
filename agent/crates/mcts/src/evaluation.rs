@@ -89,6 +89,31 @@ pub fn softmax_legal_moves_mask(logits: &[f32], legal_mask: u64) -> Vec<(usize, 
         .collect()
 }
 
+/// Compute softmax over legal moves only (Vec version)
+///
+/// Illegal moves are masked with -inf before softmax, so they get probability 0
+#[allow(dead_code)]
+pub fn softmax_legal_moves(logits: &[f32], legal_moves: &[usize]) -> Vec<f32> {
+    if legal_moves.is_empty() {
+        return Vec::new();
+    }
+
+    // Find max for numerical stability
+    let max = legal_moves
+        .iter()
+        .map(|&m| logits[m])
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    // Compute exp and sum
+    let exp_sum: f32 = legal_moves.iter().map(|&m| (logits[m] - max).exp()).sum();
+
+    // Normalize
+    legal_moves
+        .iter()
+        .map(|&m| (logits[m] - max).exp() / exp_sum)
+        .collect()
+}
+
 /// Helper: Convert tensor to Vec<f32>
 fn tensor_to_vec_f32(tensor: &Tensor) -> Result<Vec<f32>> {
     let size = tensor.size();
