@@ -204,9 +204,8 @@ impl Default for Mcts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::tree::MctsTree;
-    
 
     #[test]
     fn test_mcts_creation() {

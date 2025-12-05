@@ -18,7 +18,8 @@ def main() -> None:
     scripted = torch.jit.trace(model, example_input)
 
     out_path = models_dir / "latest.pt"
-    assert isinstance(scripted, torch.jit.ScriptModule)
+    if not isinstance(scripted, torch.jit.ScriptModule):
+        raise TypeError("Expected scripted model to be a ScriptModule")
     scripted.save(str(out_path))
     print(f"Saved TorchScript model to {out_path}")
 

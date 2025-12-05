@@ -16,6 +16,13 @@ dependencies = [
 [project.scripts]
 trainer = "reversi_zero_trainer:main"
 
+[dependency-groups]
+dev = [
+    "commitizen>=4.10.0",
+    "pre-commit>=4.5.0",
+    "pytest>=9.0.1",
+]
+
 [build-system]
 requires = ["uv_build>=0.9.13,<0.10.0"]
 build-backend = "uv_build"

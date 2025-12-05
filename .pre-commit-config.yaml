@@ -1,0 +1,84 @@
+repos:
+  # Common checks for all files
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+
+  # Python (trainer/)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: ^trainer/
+      - id: ruff-format
+        files: ^trainer/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        files: ^trainer/
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        args:
+          - "-q"
+          - "-r"
+          - "./trainer"
+          - "-x"
+          - "./trainer/.venv/,./trainer/tests/"
+        pass_filenames: false
+        files: ^trainer/
+
+  # Rust (agent/)
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: bash -c 'cd agent && cargo fmt --all -- --check'
+        language: system
+        files: ^agent/.*\.rs$
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: bash -c 'cd agent && cargo clippy --all-targets --all-features -- -D warnings'
+        language: system
+        files: ^agent/.*\.rs$
+        pass_filenames: false
+
+  # Commit message format
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.27.0
+    hooks:
+      - id: commitizen
+        stages:
+          - commit-msg
+
+  # Tests
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: bash -c 'cd trainer && uv run pytest'
+        language: system
+        files: ^trainer/.*\.py$
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        entry: bash -c 'cd agent && cargo test --all'
+        language: system
+        files: ^agent/.*\.rs$
+        pass_filenames: false
