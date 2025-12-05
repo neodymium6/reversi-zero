@@ -115,7 +115,7 @@ pub fn softmax_legal_moves(logits: &[f32], legal_moves: &[usize]) -> Vec<f32> {
 }
 
 /// Helper: Convert tensor to Vec<f32>
-fn tensor_to_vec_f32(tensor: &Tensor) -> Result<Vec<f32>> {
+pub(crate) fn tensor_to_vec_f32(tensor: &Tensor) -> Result<Vec<f32>> {
     let size = tensor.size();
     if size.len() != 1 {
         return Err(MctsError::EvaluationFailed(format!(
@@ -134,7 +134,7 @@ fn tensor_to_vec_f32(tensor: &Tensor) -> Result<Vec<f32>> {
 }
 
 /// Helper: Convert tensor to f32
-fn tensor_to_f32(tensor: &Tensor) -> Result<f32> {
+pub(crate) fn tensor_to_f32(tensor: &Tensor) -> Result<f32> {
     let size = tensor.size();
     if !size.is_empty() && size.iter().product::<i64>() != 1 {
         return Err(MctsError::EvaluationFailed(format!(

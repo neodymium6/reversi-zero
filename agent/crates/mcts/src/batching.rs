@@ -61,27 +61,54 @@ impl<M: PolicyValueModel + Send + Sync + 'static> Clone for BatchingModel<M> {
 
 impl<M: PolicyValueModel + Send + Sync + 'static> PolicyValueModel for BatchingModel<M> {
     fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
-        let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
+        // If caller passes a batch (B, C, H, W), enqueue all samples at once and then
+        // reassemble outputs to preserve batching while keeping worker inputs 3D.
+        if x.dim() == 4 && x.size()[0] > 1 {
+            let batch = x.size()[0] as usize;
+            let mut policy_parts = Vec::with_capacity(batch);
+            let mut value_parts = Vec::with_capacity(batch);
+            let mut receivers = Vec::with_capacity(batch);
 
-        // The caller typically passes [1, C, H, W]; we want to batch on the first
-        // dimension, so strip the leading singleton to avoid producing a 5D tensor
-        // after stacking.
-        let input = if x.dim() == 4 && x.size()[0] == 1 {
-            x.squeeze_dim(0)
+            for i in 0..batch {
+                let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
+                let input = x.get(i as i64).squeeze_dim(0); // [C, H, W]
+                self.inner
+                    .sender
+                    .send(BatchWork { input, resp_tx })
+                    .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
+                receivers.push(resp_rx);
+            }
+
+            for rx in receivers {
+                let (p, v) = rx
+                    .recv()
+                    .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))??;
+                policy_parts.push(p);
+                value_parts.push(v);
+            }
+
+            let policy = Tensor::stack(&policy_parts, 0);
+            let value = Tensor::stack(&value_parts, 0);
+            Ok((policy, value))
         } else {
-            x.shallow_clone()
-        };
+            let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
 
-        // Enqueue the work. If the worker has stopped, surface an error.
-        self.inner
-            .sender
-            .send(BatchWork { input, resp_tx })
-            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
+            // Normalize to 3D before sending to worker to avoid 5D stacks.
+            let input = if x.dim() == 4 && x.size()[0] == 1 {
+                x.squeeze_dim(0)
+            } else {
+                x.shallow_clone()
+            };
 
-        // Block until the worker returns the matching slice.
-        resp_rx
-            .recv()
-            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
+            self.inner
+                .sender
+                .send(BatchWork { input, resp_tx })
+                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
+
+            resp_rx
+                .recv()
+                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
+        }
     }
 
     fn device(&self) -> Device {

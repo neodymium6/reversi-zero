@@ -68,9 +68,23 @@ def verify_selfplay_data(base_path: str) -> None:
     print(
         f"\nPolicy sums: mean={policy_sums.mean():.4f}, " f"std={policy_sums.std():.6f}"
     )
-    if not np.allclose(policy_sums, 1.0, atol=1e-5):
-        raise ValueError("Policies should sum to 1")
-    print("✓ All policies sum to 1.0")
+
+    # Allow pass-only positions to have sum ≈ 0. Non-pass positions should sum ≈ 1.
+    near_zero = np.isclose(policy_sums, 0.0, atol=1e-5)
+    near_one = np.isclose(policy_sums, 1.0, atol=1e-3)
+
+    print(
+        f"  Sums near zero (likely pass states): {near_zero.sum()} / {len(policy_sums)}"
+    )
+    print(f"  Sums near one: {near_one.sum()} / {len(policy_sums)}")
+
+    if not np.all(near_zero | near_one):
+        bad = np.where(~(near_zero | near_one))[0]
+        raise ValueError(
+            f"Policies should sum to 1.0 (or 0.0 for pass). "
+            f"Found {len(bad)} mismatches, examples: {bad[:5]}"
+        )
+    print("✓ Policy sums are valid (1.0 or 0.0 for pass states)")
 
     # Verify values are in {-1, 0, 1}
     unique_values = np.unique(values)

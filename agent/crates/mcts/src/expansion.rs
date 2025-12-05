@@ -10,7 +10,7 @@ pub fn expand_and_evaluate<M: PolicyValueModel>(
     model: &M,
 ) -> Result<f32> {
     // Clone state first to avoid borrow checker issues
-    let mut leaf_state = tree.nodes[leaf_id].state.clone();
+    let leaf_state = tree.nodes[leaf_id].state.clone();
 
     // Handle terminal nodes
     if leaf_state.is_game_over() {
@@ -24,6 +24,19 @@ pub fn expand_and_evaluate<M: PolicyValueModel>(
     // Get NN evaluation
     let (policy_logits, value) = evaluate_with_nn(&leaf_state, model)?;
 
+    expand_with_policy_value(tree, leaf_id, leaf_state, &policy_logits, value)
+}
+
+/// Expand a node using precomputed policy logits and value.
+///
+/// This is used by both the standard single-eval path and batched eval paths.
+pub fn expand_with_policy_value(
+    tree: &mut MctsTree,
+    leaf_id: NodeId,
+    mut leaf_state: Board,
+    policy_logits: &[f32],
+    value: f32,
+) -> Result<f32> {
     // Pass check is cheaper than generating legal move list, so handle it first
     if leaf_state.is_pass() {
         let mut child_state = leaf_state.clone();
@@ -47,7 +60,7 @@ pub fn expand_and_evaluate<M: PolicyValueModel>(
     }
 
     // Softmax policy over legal moves
-    let move_priors = softmax_legal_moves_mask(&policy_logits, legal_moves_mask);
+    let move_priors = softmax_legal_moves_mask(policy_logits, legal_moves_mask);
 
     // Create children
     for (move_idx, prior) in move_priors {
@@ -69,7 +82,7 @@ pub fn expand_and_evaluate<M: PolicyValueModel>(
 /// - 1.0 if current player wins
 /// - -1.0 if current player loses
 /// - 0.0 for draw
-fn calculate_terminal_value(board: &Board) -> f32 {
+pub(crate) fn calculate_terminal_value(board: &Board) -> f32 {
     // Use is_win/is_lose/is_draw for efficiency
     if board.is_win().unwrap_or(false) {
         1.0

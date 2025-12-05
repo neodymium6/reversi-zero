@@ -6,11 +6,12 @@ use crate::backup::backup;
 use crate::config::MctsConfig;
 use crate::dirichlet::add_dirichlet_noise_to_root;
 use crate::error::{MctsError, Result};
-use crate::evaluation::PolicyValueModel;
-use crate::expansion::expand_and_evaluate;
+use crate::evaluation::{PolicyValueModel, tensor_to_f32, tensor_to_vec_f32};
+use crate::expansion::{calculate_terminal_value, expand_and_evaluate, expand_with_policy_value};
 use crate::search_result::SearchResult;
 use crate::selection::select;
 use crate::tree::{MctsTree, NodeId};
+use tch::Tensor;
 
 /// Monte Carlo Tree Search for Reversi using AlphaZero algorithm
 pub struct Mcts {
@@ -47,16 +48,29 @@ impl Mcts {
             add_dirichlet_noise_to_root(&mut self.tree, root_id, config)?;
         }
 
-        // 3. Run simulations
-        for _ in 0..config.num_simulations {
-            // Selection: traverse tree using PUCT
-            let leaf_id = select(&self.tree, root_id, config.c_puct);
+        // 3. Run simulations (optionally batched)
+        let batch_size = config.batch_size.max(1);
+        let mut sims_done = 0;
+        while sims_done < config.num_simulations {
+            let remaining = (config.num_simulations - sims_done) as usize;
+            let current_batch = remaining.min(batch_size as usize);
 
-            // Expansion & Evaluation: expand and get NN value
-            let value = expand_and_evaluate(&mut self.tree, leaf_id, model)?;
+            // Select a batch of leaves
+            let mut leaf_ids = Vec::with_capacity(current_batch);
+            for _ in 0..current_batch {
+                let leaf_id = select(&self.tree, root_id, config.c_puct);
+                leaf_ids.push(leaf_id);
+            }
 
-            // Backup: propagate value up tree
-            backup(&mut self.tree, leaf_id, value);
+            // Expand & evaluate the batch
+            let values = self.expand_and_evaluate_batch(&leaf_ids, model)?;
+
+            // Backup each value along the selected path
+            for (leaf_id, value) in leaf_ids.into_iter().zip(values.into_iter()) {
+                backup(&mut self.tree, leaf_id, value);
+            }
+
+            sims_done += current_batch as u32;
         }
 
         // 4. Extract results
@@ -192,6 +206,72 @@ impl Mcts {
     /// Get the number of nodes in the tree
     pub fn tree_size(&self) -> usize {
         self.tree.size()
+    }
+
+    /// Expand and evaluate a batch of leaves using a single forward pass.
+    fn expand_and_evaluate_batch<M: PolicyValueModel>(
+        &mut self,
+        leaf_ids: &[NodeId],
+        model: &M,
+    ) -> Result<Vec<f32>> {
+        if leaf_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect boards that need NN evaluation; handle terminal states immediately.
+        struct PendingEval {
+            value_index: usize,
+            leaf_id: NodeId,
+            board: Board,
+        }
+
+        let mut values = vec![0.0f32; leaf_ids.len()];
+        let mut pending = Vec::<PendingEval>::new();
+        for (i, &leaf_id) in leaf_ids.iter().enumerate() {
+            let board = self.tree.nodes[leaf_id].state.clone();
+            if board.is_game_over() {
+                let value = calculate_terminal_value(&board);
+                self.tree.nodes[leaf_id].is_terminal = true;
+                self.tree.nodes[leaf_id].terminal_value = Some(value);
+                self.tree.nodes[leaf_id].is_expanded = true;
+                values[i] = value;
+                continue;
+            }
+
+            pending.push(PendingEval {
+                value_index: i,
+                leaf_id,
+                board,
+            });
+        }
+
+        // Evaluate pending boards in one forward pass (if any).
+        if !pending.is_empty() {
+            let tensors: Vec<Tensor> = pending.iter().map(|p| p.board.to_tensor()).collect();
+            let input = Tensor::stack(&tensors, 0).to_device(model.device());
+            let (policy_batch, value_batch) = model.forward(&input)?;
+
+            for (batch_idx, item) in pending.into_iter().enumerate() {
+                let policy_tensor = policy_batch.get(batch_idx as i64);
+                let value_tensor = value_batch.get(batch_idx as i64);
+
+                let policy_vec = tensor_to_vec_f32(&policy_tensor)?;
+                let value = tensor_to_f32(&value_tensor)?;
+
+                // Expand this leaf with the evaluated policy/value
+                expand_with_policy_value(
+                    &mut self.tree,
+                    item.leaf_id,
+                    item.board,
+                    &policy_vec,
+                    value,
+                )?;
+
+                values[item.value_index] = value;
+            }
+        }
+
+        Ok(values)
     }
 }
 

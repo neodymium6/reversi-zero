@@ -48,10 +48,11 @@ fn bench_multi_game_parallel(c: &mut Criterion) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(4);
+    let batch_size_default = num_games;
     let batch_size: usize = std::env::var("BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(num_games);
+        .unwrap_or(batch_size_default);
     let batch_timeout_ms: u64 = std::env::var("BATCH_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -125,5 +126,109 @@ fn bench_multi_game_parallel(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_single_game, bench_multi_game_parallel);
+/// Higher-simulation parallel benchmark to compare default vs larger batch sizes.
+fn bench_multi_game_parallel_high_sims(c: &mut Criterion) {
+    let mut group = c.benchmark_group("multi_game_high_sims");
+    group.sample_size(30); // higher sims; keep samples lower to finish faster
+
+    let model_path =
+        std::env::var("MODEL_PATH").unwrap_or_else(|_| "../../../models/ts/latest.pt".to_string());
+
+    let device = Device::cuda_if_available();
+    let num_games: usize = std::env::var("NUM_GAMES_HIGH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4);
+    let batch_timeout_ms: u64 = std::env::var("BATCH_TIMEOUT_MS_HIGH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let game_concurrency: usize = std::env::var("GAME_CONCURRENCY_HIGH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(num_games);
+    let num_simulations: u32 = std::env::var("NUM_SIMULATIONS_HIGH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+
+    // Baseline batch size: match game count
+    let batch_size_base = num_games as u32;
+    // Larger batch: 4x games, capped at 32
+    let batch_size_big = (num_games * 4).min(32) as u32;
+
+    let base_model = NnModel::load(&model_path, device).expect("Failed to load model");
+    let batching_model = BatchingModel::new(
+        base_model,
+        batch_size_big as usize, // worker can handle up to the larger batch
+        Duration::from_millis(batch_timeout_ms),
+    );
+
+    let config_par_base = MctsConfig::default()
+        .with_simulations(num_simulations)
+        .with_batch_size(batch_size_base)
+        .with_batch_timeout_ms(batch_timeout_ms)
+        .with_c_puct(1.5)
+        .with_temperature(1.0)
+        .with_dirichlet_noise(0.3, 0.25);
+
+    let config_par_big = MctsConfig::default()
+        .with_simulations(num_simulations)
+        .with_batch_size(batch_size_big)
+        .with_batch_timeout_ms(batch_timeout_ms)
+        .with_c_puct(1.5)
+        .with_temperature(1.0)
+        .with_dirichlet_noise(0.3, 0.25);
+
+    group.bench_function(
+        BenchmarkId::new(
+            "parallel_base",
+            format!(
+                "{}-games-conc{}-bs{}",
+                num_games, game_concurrency, batch_size_base
+            ),
+        ),
+        |b| {
+            let model = batching_model.clone();
+            b.iter(|| {
+                (0..num_games)
+                    .into_par_iter()
+                    .with_max_len(1)
+                    .with_min_len(1)
+                    .map(|_| play_game(&model, &config_par_base).expect("Game failed"))
+                    .collect::<Vec<_>>();
+            })
+        },
+    );
+
+    group.bench_function(
+        BenchmarkId::new(
+            "parallel_big_batch",
+            format!(
+                "{}-games-conc{}-bs{}",
+                num_games, game_concurrency, batch_size_big
+            ),
+        ),
+        |b| {
+            let model = batching_model.clone();
+            b.iter(|| {
+                (0..num_games)
+                    .into_par_iter()
+                    .with_max_len(1)
+                    .with_min_len(1)
+                    .map(|_| play_game(&model, &config_par_big).expect("Game failed"))
+                    .collect::<Vec<_>>();
+            })
+        },
+    );
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_single_game,
+    bench_multi_game_parallel,
+    bench_multi_game_parallel_high_sims
+);
 criterion_main!(benches);
