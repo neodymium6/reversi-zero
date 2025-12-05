@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "reversi-zero-rs"
+version = "0.1.0"
+requires-python = ">=3.8"
+description = "Python bindings for Reversi Zero self-play (PyO3)"
+authors = [{ name = "neodymium6" }]
+
+[tool.maturin]
+bindings = "pyo3"
+compatibility = "manylinux_2_17"
+sdist-include = ["Cargo.lock", "Cargo.toml", "src/**"]
+features = ["extension-module"]
+strip = true

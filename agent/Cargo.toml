@@ -5,6 +5,7 @@ members = [
     "crates/nn",
     "crates/selfplay",
     "crates/cli",
+    "crates/reversi_zero_rs",
 ]
 
 resolver = "2"

@@ -11,7 +11,11 @@ dependencies = [
     "numpy>=2.2.6",
     "setuptools>=80.9.0",
     "torch==2.9.0",
+    "reversi-zero-rs",
 ]
+
+[tool.uv.sources]
+reversi-zero-rs = { path = "../agent/crates/reversi_zero_rs" }
 
 [project.scripts]
 trainer = "reversi_zero_trainer:main"

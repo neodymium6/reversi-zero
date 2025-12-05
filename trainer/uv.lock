@@ -808,12 +808,18 @@ wheels = [
 ]
 
 [[package]]
+name = "reversi-zero-rs"
+version = "0.1.0"
+source = { directory = "../agent/crates/reversi_zero_rs" }
+
+[[package]]
 name = "reversi-zero-trainer"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "reversi-zero-rs" },
     { name = "setuptools" },
     { name = "torch" },
 ]
@@ -828,6 +834,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.2.6" },
+    { name = "reversi-zero-rs", directory = "../agent/crates/reversi_zero_rs" },
     { name = "setuptools", specifier = ">=80.9.0" },
     { name = "torch", specifier = "==2.9.0" },
 ]
