@@ -16,6 +16,8 @@ reversi-selfplay = { path = "../selfplay" }
 reversi-core = { path = "../core" }
 tch = "0.22.0"
 anyhow = "1.0"
+rayon = "1.10"
+num_cpus = "1.16"
 
 [features]
 extension-module = ["pyo3/extension-module"]
