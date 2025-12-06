@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tch::{CModule, Device, IValue, Tensor};
+use tch::{CModule, Device, IValue, Tensor, no_grad};
 
 pub struct NnModel {
     module: CModule,
@@ -19,7 +19,7 @@ impl NnModel {
 
     pub fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
         let input_ivalue = IValue::Tensor(x.shallow_clone());
-        let iv = self.module.forward_is(&[input_ivalue])?;
+        let iv = no_grad(|| self.module.forward_is(&[input_ivalue]))?;
 
         match iv {
             IValue::Tuple(mut elems) => {

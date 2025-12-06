@@ -10,21 +10,23 @@ def main() -> None:
     """
 
     stream = SelfPlayStream(
-        total_games=16,
-        report_interval=4,  # emit stats every 4 games
+        total_games=10_000,
+        report_interval=256,
         batch=BatchConfigArgs(
-            # batch_size=8,
-            # game_concurrency=4,
-            # batch_timeout_ms=1,
+            batch_size=256,
+            game_concurrency=32,
+            batch_timeout_ms=1,
         ),
         mcts=MctsConfigArgs(
-            # num_simulations=800,
+            num_simulations=800,
             # c_puct=1.5,
             # temperature=1.0,
             # dirichlet_alpha=0.3,
             # dirichlet_epsilon=0.25,
         ),
-        # device="cuda",  # or "cpu"
+        model_path="../models/ts/latest_resnet_c64_b6.pt",
+        device="cuda",  # or "cpu"
+        # device="cpu",
     )
 
     for step, stats in enumerate(stream):
