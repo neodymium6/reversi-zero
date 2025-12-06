@@ -74,15 +74,40 @@ impl BatchConfigArgs {
     }
 }
 
-/// Python-facing stats for self-play progress.
+/// Python-facing stats for self-play progress (incremental per step).
 #[pyclass]
 pub struct SelfPlayStats {
+    // Incremental counts (this step only)
     #[pyo3(get)]
     pub games: u32,
     #[pyo3(get)]
-    pub black_win_rate: f32,
+    pub black_wins: u32,
+    #[pyo3(get)]
+    pub white_wins: u32,
     #[pyo3(get)]
     pub draws: u32,
+
+    // Win rates (this step only)
+    #[pyo3(get)]
+    pub black_win_rate: f32,
+    #[pyo3(get)]
+    pub white_win_rate: f32,
+    #[pyo3(get)]
+    pub draw_rate: f32,
+
+    // Time metrics
+    #[pyo3(get)]
+    pub step_duration_sec: f64,
+    #[pyo3(get)]
+    pub games_per_sec: f32,
+    #[pyo3(get)]
+    pub elapsed_time_sec: f64,
+
+    // Game quality
+    #[pyo3(get)]
+    pub avg_game_length: f32,
+    #[pyo3(get)]
+    pub positions_generated: u64,
 }
 
 /// Stream self-play games in batches, yielding stats after each batch.
@@ -91,11 +116,15 @@ pub struct SelfPlayStream {
     total_games: u32,
     report_interval: u32,
     games_done: u32,
-    black_wins: u32,
-    draws: u32,
+    black_wins_total: u32,
+    white_wins_total: u32,
+    draws_total: u32,
+    total_positions: u64,
     model: BatchingModel<NnModel>,
     config: MctsConfig,
     pool: Arc<ThreadPool>,
+    start_time: std::time::Instant,
+    last_report_time: std::time::Instant,
 }
 
 #[pymethods]
@@ -197,15 +226,20 @@ impl SelfPlayStream {
             .build()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
 
+        let now = std::time::Instant::now();
         Ok(SelfPlayStream {
             total_games,
             report_interval,
             games_done: 0,
-            black_wins: 0,
-            draws: 0,
+            black_wins_total: 0,
+            white_wins_total: 0,
+            draws_total: 0,
+            total_positions: 0,
             model,
             config,
             pool: Arc::new(pool),
+            start_time: now,
+            last_report_time: now,
         })
     }
 
@@ -224,6 +258,13 @@ impl SelfPlayStream {
         let model = self.model.clone();
         let config = self.config.clone();
 
+        // Track incremental stats for this step
+        let mut step_black_wins = 0u32;
+        let mut step_white_wins = 0u32;
+        let mut step_draws = 0u32;
+        let mut step_total_moves = 0u64;
+        let mut step_positions = 0u64;
+
         let results: Vec<anyhow::Result<_>> = self.pool.install(|| {
             (0..chunk)
                 .into_par_iter()
@@ -237,24 +278,84 @@ impl SelfPlayStream {
             let record = res.map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Self-play failed: {e}"))
             })?;
+
             self.games_done += 1;
+
+            // Track step-level incremental stats
+            let game_length = record.states.len() as u64;
+            step_total_moves += game_length;
+            step_positions += game_length;
+
             match record.winner {
-                GameResult::BlackWin => self.black_wins += 1,
-                GameResult::WhiteWin => (),
-                GameResult::Draw => self.draws += 1,
+                GameResult::BlackWin => {
+                    self.black_wins_total += 1;
+                    step_black_wins += 1;
+                }
+                GameResult::WhiteWin => {
+                    self.white_wins_total += 1;
+                    step_white_wins += 1;
+                }
+                GameResult::Draw => {
+                    self.draws_total += 1;
+                    step_draws += 1;
+                }
             }
         }
 
-        let black_win_rate = if self.games_done == 0 {
-            0.0
+        self.total_positions += step_positions;
+
+        // Calculate time metrics
+        let now = std::time::Instant::now();
+        let step_duration = now.duration_since(self.last_report_time);
+        let elapsed = now.duration_since(self.start_time);
+        self.last_report_time = now;
+
+        let step_duration_sec = step_duration.as_secs_f64();
+        let elapsed_sec = elapsed.as_secs_f64();
+        let games_per_sec = if step_duration_sec > 0.0 {
+            chunk as f32 / step_duration_sec as f32
         } else {
-            self.black_wins as f32 / self.games_done as f32
+            0.0
+        };
+
+        // Calculate win rates for this step
+        let step_games = chunk;
+        let black_win_rate = if step_games > 0 {
+            step_black_wins as f32 / step_games as f32
+        } else {
+            0.0
+        };
+        let white_win_rate = if step_games > 0 {
+            step_white_wins as f32 / step_games as f32
+        } else {
+            0.0
+        };
+        let draw_rate = if step_games > 0 {
+            step_draws as f32 / step_games as f32
+        } else {
+            0.0
+        };
+
+        // Calculate average game length for this step
+        let avg_game_length = if step_games > 0 {
+            step_total_moves as f32 / step_games as f32
+        } else {
+            0.0
         };
 
         Ok(Some(SelfPlayStats {
-            games: self.games_done,
+            games: step_games,
+            black_wins: step_black_wins,
+            white_wins: step_white_wins,
+            draws: step_draws,
             black_win_rate,
-            draws: self.draws,
+            white_win_rate,
+            draw_rate,
+            step_duration_sec,
+            games_per_sec,
+            elapsed_time_sec: elapsed_sec,
+            avg_game_length,
+            positions_generated: step_positions,
         }))
     }
 }
