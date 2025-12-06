@@ -25,6 +25,7 @@ def main() -> None:
     num_simulations = 800
     model_path = "../models/ts/latest_resnet_c64_b6.pt"
     device = "cuda"
+    save_dir = "data/selfplay"  # Auto-save directory (creates states.npy, policies.npy, values.npy)
 
     # Create logging configuration with rich console output
     logging_cfg = LoggingConfig(
@@ -47,6 +48,7 @@ def main() -> None:
         logger.log_param("num_simulations", num_simulations)
         logger.log_param("model_path", model_path)
         logger.log_param("device", device)
+        logger.log_param("save_dir", save_dir)
 
         stream = SelfPlayStream(
             total_games=total_games,
@@ -65,6 +67,7 @@ def main() -> None:
             ),
             model_path=model_path,
             device=device,
+            save_dir=save_dir,  # Enables automatic cumulative saving to directory
         )
 
         for step, stats in enumerate(stream):

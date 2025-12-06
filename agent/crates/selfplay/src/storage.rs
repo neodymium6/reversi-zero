@@ -1,6 +1,7 @@
 use anyhow::Result;
-use ndarray::{Array, Array1, Array2, Array4};
-use ndarray_npy::write_npy;
+use ndarray::{concatenate, Array, Array1, Array2, Array4, Axis};
+use ndarray_npy::{read_npy, write_npy};
+use std::path::Path;
 
 use crate::data::TrainingExample;
 
@@ -31,6 +32,13 @@ pub fn save_training_data(examples: &[TrainingExample], path: &str) -> Result<()
         anyhow::bail!("Cannot save empty training data");
     }
 
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
     // Extract and flatten states: (N, 3, 8, 8)
     let states: Vec<f32> = examples
         .iter()
@@ -55,6 +63,177 @@ pub fn save_training_data(examples: &[TrainingExample], path: &str) -> Result<()
     write_npy(format!("{}_states.npy", path), &states_array)?;
     write_npy(format!("{}_policies.npy", path), &policies_array)?;
     write_npy(format!("{}_values.npy", path), &values_array)?;
+
+    Ok(())
+}
+
+/// Append training data to a directory (without prefix)
+///
+/// Saves data to:
+/// - `{dir}/states.npy`
+/// - `{dir}/policies.npy`
+/// - `{dir}/values.npy`
+///
+/// Creates the directory if it doesn't exist.
+/// Appends to existing files if they exist.
+///
+/// # Arguments
+/// * `examples` - Slice of new training examples to append
+/// * `dir` - Directory to save files in
+///
+/// # Example
+/// ```no_run
+/// use reversi_selfplay::storage::append_training_data_to_dir;
+/// use reversi_selfplay::TrainingExample;
+///
+/// let examples = vec![
+///     TrainingExample::new(vec![0.0; 192], vec![0.0; 64], 1.0),
+/// ];
+/// append_training_data_to_dir(&examples, "data/selfplay").unwrap();
+/// // Creates: data/selfplay/states.npy, data/selfplay/policies.npy, data/selfplay/values.npy
+/// ```
+pub fn append_training_data_to_dir(examples: &[TrainingExample], dir: &str) -> Result<()> {
+    if examples.is_empty() {
+        anyhow::bail!("Cannot save empty training data");
+    }
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(dir)?;
+
+    let states_path = Path::new(dir).join("states.npy");
+    let policies_path = Path::new(dir).join("policies.npy");
+    let values_path = Path::new(dir).join("values.npy");
+
+    // Prepare new data arrays
+    let new_states: Vec<f32> = examples
+        .iter()
+        .flat_map(|e| e.state.iter().copied())
+        .collect();
+    let new_states_array: Array4<f32> =
+        Array::from_shape_vec((examples.len(), 3, 8, 8), new_states)?;
+
+    let new_policies: Vec<f32> = examples
+        .iter()
+        .flat_map(|e| e.policy.iter().copied())
+        .collect();
+    let new_policies_array: Array2<f32> =
+        Array::from_shape_vec((examples.len(), 64), new_policies)?;
+
+    let new_values: Vec<f32> = examples.iter().map(|e| e.value).collect();
+    let new_values_array: Array1<f32> = Array::from_vec(new_values);
+
+    // Check if files exist and concatenate if they do
+    let final_states = if states_path.exists() {
+        let existing: Array4<f32> = read_npy(&states_path)?;
+        concatenate(Axis(0), &[existing.view(), new_states_array.view()])?
+    } else {
+        new_states_array
+    };
+
+    let final_policies = if policies_path.exists() {
+        let existing: Array2<f32> = read_npy(&policies_path)?;
+        concatenate(Axis(0), &[existing.view(), new_policies_array.view()])?
+    } else {
+        new_policies_array
+    };
+
+    let final_values = if values_path.exists() {
+        let existing: Array1<f32> = read_npy(&values_path)?;
+        concatenate(Axis(0), &[existing.view(), new_values_array.view()])?
+    } else {
+        new_values_array
+    };
+
+    // Write concatenated data
+    write_npy(&states_path, &final_states)?;
+    write_npy(&policies_path, &final_policies)?;
+    write_npy(&values_path, &final_values)?;
+
+    Ok(())
+}
+
+/// Append training data to existing NPY files (or create new if they don't exist)
+///
+/// DEPRECATED: Use `append_training_data_to_dir` instead for cleaner directory structure.
+///
+/// If the files already exist, loads them and concatenates the new data.
+/// If they don't exist, creates new files with just the new data.
+///
+/// # Arguments
+/// * `examples` - Slice of new training examples to append
+/// * `path` - Base path for output files (without extension)
+///
+/// # Example
+/// ```no_run
+/// use reversi_selfplay::storage::append_training_data;
+/// use reversi_selfplay::TrainingExample;
+///
+/// let examples = vec![
+///     TrainingExample::new(vec![0.0; 192], vec![0.0; 64], 1.0),
+/// ];
+/// append_training_data(&examples, "selfplay_data").unwrap();
+/// // Appends to existing files or creates new ones
+/// ```
+pub fn append_training_data(examples: &[TrainingExample], path: &str) -> Result<()> {
+    if examples.is_empty() {
+        anyhow::bail!("Cannot save empty training data");
+    }
+
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let states_path = format!("{}_states.npy", path);
+    let policies_path = format!("{}_policies.npy", path);
+    let values_path = format!("{}_values.npy", path);
+
+    // Prepare new data arrays
+    let new_states: Vec<f32> = examples
+        .iter()
+        .flat_map(|e| e.state.iter().copied())
+        .collect();
+    let new_states_array: Array4<f32> =
+        Array::from_shape_vec((examples.len(), 3, 8, 8), new_states)?;
+
+    let new_policies: Vec<f32> = examples
+        .iter()
+        .flat_map(|e| e.policy.iter().copied())
+        .collect();
+    let new_policies_array: Array2<f32> =
+        Array::from_shape_vec((examples.len(), 64), new_policies)?;
+
+    let new_values: Vec<f32> = examples.iter().map(|e| e.value).collect();
+    let new_values_array: Array1<f32> = Array::from_vec(new_values);
+
+    // Check if files exist and concatenate if they do
+    let final_states = if Path::new(&states_path).exists() {
+        let existing: Array4<f32> = read_npy(&states_path)?;
+        concatenate(Axis(0), &[existing.view(), new_states_array.view()])?
+    } else {
+        new_states_array
+    };
+
+    let final_policies = if Path::new(&policies_path).exists() {
+        let existing: Array2<f32> = read_npy(&policies_path)?;
+        concatenate(Axis(0), &[existing.view(), new_policies_array.view()])?
+    } else {
+        new_policies_array
+    };
+
+    let final_values = if Path::new(&values_path).exists() {
+        let existing: Array1<f32> = read_npy(&values_path)?;
+        concatenate(Axis(0), &[existing.view(), new_values_array.view()])?
+    } else {
+        new_values_array
+    };
+
+    // Write concatenated data
+    write_npy(states_path, &final_states)?;
+    write_npy(policies_path, &final_policies)?;
+    write_npy(values_path, &final_values)?;
 
     Ok(())
 }

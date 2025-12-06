@@ -7,7 +7,10 @@ use rayon::ThreadPool;
 use rayon::prelude::*;
 use reversi_mcts::{BatchingModel, MctsConfig};
 use reversi_nn::NnModel;
-use reversi_selfplay::{GameResult, play_game};
+use reversi_selfplay::{
+    GameRecord, GameResult, game_to_training_examples, play_game,
+    storage::append_training_data_to_dir,
+};
 use tch::Device;
 
 #[pyclass]
@@ -125,6 +128,8 @@ pub struct SelfPlayStream {
     pool: Arc<ThreadPool>,
     start_time: std::time::Instant,
     last_report_time: std::time::Instant,
+    save_dir: Option<String>,
+    current_batch_records: Vec<GameRecord>,
 }
 
 #[pymethods]
@@ -137,6 +142,7 @@ impl SelfPlayStream {
         device=None,
         batch=None,
         mcts=None,
+        save_dir=None,
     ))]
     pub fn new(
         total_games: u32,
@@ -145,6 +151,7 @@ impl SelfPlayStream {
         device: Option<String>,
         batch: Option<BatchConfigArgs>,
         mcts: Option<MctsConfigArgs>,
+        save_dir: Option<String>,
     ) -> PyResult<Self> {
         if total_games == 0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -227,6 +234,12 @@ impl SelfPlayStream {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
 
         let now = std::time::Instant::now();
+
+        // Warn if save_dir is not set
+        if save_dir.is_none() {
+            eprintln!("Warning: save_dir is not set. Game data will not be saved to disk.");
+        }
+
         Ok(SelfPlayStream {
             total_games,
             report_interval,
@@ -240,6 +253,8 @@ impl SelfPlayStream {
             pool: Arc::new(pool),
             start_time: now,
             last_report_time: now,
+            save_dir,
+            current_batch_records: Vec::new(),
         })
     }
 
@@ -300,6 +315,29 @@ impl SelfPlayStream {
                     step_draws += 1;
                 }
             }
+
+            // Store record temporarily for potential saving
+            if self.save_dir.is_some() {
+                self.current_batch_records.push(record);
+            }
+        }
+
+        // Auto-save if directory is specified (appends to disk, doesn't keep in memory)
+        if let Some(ref dir) = self.save_dir {
+            // Convert records to training examples
+            let examples: Vec<_> = self
+                .current_batch_records
+                .iter()
+                .flat_map(game_to_training_examples)
+                .collect();
+
+            // Append to directory (creates states.npy, policies.npy, values.npy)
+            append_training_data_to_dir(&examples, dir).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Auto-save failed: {e}"))
+            })?;
+
+            // Clear from memory after saving
+            self.current_batch_records.clear();
         }
 
         self.total_positions += step_positions;
