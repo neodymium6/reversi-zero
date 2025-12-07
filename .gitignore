@@ -4,3 +4,5 @@ target/
 /models/
 .envrc
 *.npy
+*.pt
+*.

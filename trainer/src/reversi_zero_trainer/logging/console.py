@@ -54,13 +54,16 @@ class ConsoleLogger(BaseLogger):
             )
         return cfg
 
-    def log_metric(self, name: str, value: float, step: int | None = None) -> None:
+    def log_metric(
+        self, name: str, value: float, step: int | None = None, color: str | None = None
+    ) -> None:
         """Log a metric to console with rich formatting.
 
         Args:
             name: Metric name
             value: Metric value
             step: Optional step/iteration number
+            color: Optional color for the metric (default: "blue")
         """
         if not self.cfg.verbose:
             return
@@ -81,21 +84,30 @@ class ConsoleLogger(BaseLogger):
         if self.cfg.show_timestamp:
             timestamp_str = f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] "
 
+        # Use provided color or default to blue
+        if color is None:
+            bullet_color = "blue"
+            name_color = "bold blue"
+        else:
+            bullet_color = color
+            name_color = f"bold {color}"
+
         # Format with fixed width for alignment
-        # Name: left-aligned, 30 chars
-        # Value: right-aligned, consistent decimal places
-        name_formatted = f"{name:<30}"
+        # Name: left-aligned, 40 chars
+        # Value: right-aligned with fixed total width
+        name_formatted = f"{name:<40}"
+        value_formatted = f"{value:14.6f}"  # Total width 14, 6 decimals
 
         if step is not None:
             self.console.print(
-                f"{timestamp_str}[cyan]●[/cyan] [bold blue]{name_formatted}[/bold blue] "
-                f"[bold green]{value:>12.6f}[/bold green] "
+                f"{timestamp_str}[{bullet_color}]●[/{bullet_color}] [{name_color}]{name_formatted}[/{name_color}] "
+                f"[bold green]{value_formatted}[/bold green] "
                 f"[dim](step=[yellow]{step:>6}[/yellow])[/dim]"
             )
         else:
             self.console.print(
-                f"{timestamp_str}[cyan]●[/cyan] [bold blue]{name_formatted}[/bold blue] "
-                f"[bold green]{value:>12.6f}[/bold green]"
+                f"{timestamp_str}[{bullet_color}]●[/{bullet_color}] [{name_color}]{name_formatted}[/{name_color}] "
+                f"[bold green]{value_formatted}[/bold green]"
             )
 
     def log_param(self, key: str, value: Any) -> None:
@@ -126,6 +138,25 @@ class ConsoleLogger(BaseLogger):
             self.console.print(
                 f"[magenta]▸[/magenta] [bold]{key}[/bold]=[cyan]{value}[/cyan]"
             )
+
+    def log_artifact(self, name: str, path: str) -> None:
+        """Log an artifact (saved file) to console.
+
+        Args:
+            name: Artifact description (e.g., "checkpoint", "model")
+            path: File path to the artifact
+        """
+        if not self.cfg.verbose:
+            return
+
+        timestamp_str = ""
+        if self.cfg.show_timestamp:
+            timestamp_str = f"[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] "
+
+        self.console.print(
+            f"{timestamp_str}[green]✓[/green] [bold]Saved {name}:[/bold] "
+            f"[cyan]{path}[/cyan]"
+        )
 
     def _show_params_table(self) -> None:
         """Display all logged parameters in a rich table."""

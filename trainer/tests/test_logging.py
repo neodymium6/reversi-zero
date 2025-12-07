@@ -229,3 +229,23 @@ def test_console_logger_param_after_metric_raises():
         RuntimeError, match="Cannot log parameter .* after metrics have been logged"
     ):
         logger.log_param("param2", "value2")
+
+
+def test_console_logger_artifact_logging(capsys):
+    """Test that console logger can log artifacts."""
+    config = LoggingConfig(
+        backends={
+            LoggerKind.CONSOLE: ConsoleConfig(verbose=True, show_params_table=False),
+        }
+    )
+    logger = create_logger(config)
+
+    logger.log_artifact("checkpoint", "/path/to/checkpoint.pt")
+    logger.log_artifact("model", "/path/to/model.pt")
+
+    captured = capsys.readouterr()
+    assert "checkpoint" in captured.out
+    assert "/path/to/checkpoint.pt" in captured.out
+    assert "model" in captured.out
+    assert "/path/to/model.pt" in captured.out
+    assert "Saved" in captured.out

@@ -49,13 +49,16 @@ class BaseLogger(ABC):
         pass
 
     @abstractmethod
-    def log_metric(self, name: str, value: float, step: int | None = None) -> None:
+    def log_metric(
+        self, name: str, value: float, step: int | None = None, color: str | None = None
+    ) -> None:
         """Log a metric value.
 
         Args:
             name: Metric name
             value: Metric value
             step: Optional step/iteration number
+            color: Optional color for the metric (e.g., "cyan", "magenta")
         """
         pass
 
@@ -66,6 +69,16 @@ class BaseLogger(ABC):
         Args:
             key: Parameter name
             value: Parameter value
+        """
+        pass
+
+    @abstractmethod
+    def log_artifact(self, name: str, path: str) -> None:
+        """Log an artifact (saved file, checkpoint, model, etc).
+
+        Args:
+            name: Artifact description (e.g., "checkpoint", "model")
+            path: File path to the artifact
         """
         pass
 
@@ -98,15 +111,22 @@ class ListLogger(BaseLogger):
         """
         self.backends = backends
 
-    def log_metric(self, name: str, value: float, step: int | None = None) -> None:
+    def log_metric(
+        self, name: str, value: float, step: int | None = None, color: str | None = None
+    ) -> None:
         """Log metric to all backends."""
         for backend in self.backends:
-            backend.log_metric(name, value, step)
+            backend.log_metric(name, value, step, color)
 
     def log_param(self, key: str, value: Any) -> None:
         """Log parameter to all backends."""
         for backend in self.backends:
             backend.log_param(key, value)
+
+    def log_artifact(self, name: str, path: str) -> None:
+        """Log artifact to all backends."""
+        for backend in self.backends:
+            backend.log_artifact(name, path)
 
     def finish(self) -> None:
         """Finish all backends."""
