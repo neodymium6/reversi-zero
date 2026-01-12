@@ -20,7 +20,6 @@ dependencies = [
 reversi-zero-rs = { path = "../agent/crates/reversi_zero_rs" }
 
 [project.scripts]
-trainer = "reversi_zero_trainer:main"
 train = "reversi_zero_trainer.train_main:main"
 
 [dependency-groups]
