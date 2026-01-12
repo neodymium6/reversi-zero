@@ -67,6 +67,7 @@ def log_hyperparameters(
     selfplay_config: dict[str, Any],
     train_config: TrainingConfig,
     model_config: dict[str, Any],
+    arena_config: dict[str, Any],
     paths: dict[str, Path],
     device: str,
 ) -> None:
@@ -78,6 +79,7 @@ def log_hyperparameters(
         selfplay_config: Self-play configuration
         train_config: Training configuration
         model_config: Model configuration
+        arena_config: Arena evaluation configuration
         paths: Dictionary of paths (data_base_dir, models_dir, checkpoint_dir)
         device: Device being used
     """
@@ -103,6 +105,17 @@ def log_hyperparameters(
     # Model parameters
     logger.log_param("model_channels", model_config["channels"])
     logger.log_param("model_num_blocks", model_config["num_blocks"])
+
+    # Arena evaluation parameters
+    logger.log_param("arena_enabled", arena_config["enabled"])
+    logger.log_param("arena_vs_alphabeta", arena_config["vs_alphabeta"])
+    logger.log_param("arena_vs_random", arena_config["vs_random"])
+    logger.log_param("arena_games", arena_config["games"])
+    logger.log_param("arena_mcts_sims", arena_config["mcts_sims"])
+    logger.log_param(
+        "arena_alphabeta_temperature", arena_config["alphabeta_temperature"]
+    )
+    logger.log_param("arena_random_temperature", arena_config["random_temperature"])
 
     # Paths
     logger.log_param("data_base_dir", str(paths["data_base_dir"]))
