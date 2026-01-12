@@ -33,3 +33,9 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.9.13,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv.extra-build-dependencies]
+"reversi-zero-rs" = [
+    "torch==2.9.0",
+    "setuptools>=80.9.0",
+]
