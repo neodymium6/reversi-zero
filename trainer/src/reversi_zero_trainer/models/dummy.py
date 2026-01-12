@@ -15,7 +15,9 @@ class DummyReversiNet(nn.Module):
     def __init__(self, in_channels: int = 3):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
 
         self.policy_head = nn.Sequential(
             nn.Conv2d(64, 2, kernel_size=1),
@@ -33,8 +35,8 @@ class DummyReversiNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        h = F.relu(self.conv1(x))
-        h = F.relu(self.conv2(h))
+        h = F.relu(self.bn1(self.conv1(x)))
+        h = F.relu(self.bn2(self.conv2(h)))
 
         policy_logits = self.policy_head(h)  # (B, 64)
         value = self.value_head(h)  # (B, 1)
