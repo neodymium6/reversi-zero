@@ -27,7 +27,7 @@ from reversi_zero_trainer.logging import (
     log_selfplay_stats,
     log_training_metrics,
 )
-from reversi_zero_trainer.models.dummy import ResNetReversiNet
+from reversi_zero_trainer.models.dummy import DummyReversiNet
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
 
@@ -125,11 +125,12 @@ def main() -> None:
     )
 
     # Initialize model
-    model = ResNetReversiNet(
-        in_channels=3,
-        channels=model_channels,
-        num_blocks=model_num_blocks,
-    )
+    # model = ResNetReversiNet(
+    #     in_channels=3,
+    #     channels=model_channels,
+    #     num_blocks=model_num_blocks,
+    # )
+    model = DummyReversiNet(in_channels=3)
 
     # Export initial model (random weights)
     initial_model_path = models_dir / "model_iter_0.pt"
