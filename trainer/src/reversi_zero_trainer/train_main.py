@@ -71,12 +71,15 @@ def main() -> None:
     device: Literal["cuda", "cpu"] = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Self-play configuration
-    selfplay_games_per_iter = 128
-    selfplay_report_interval = 64
-    selfplay_batch_size = 512
+    factor = 1
+    selfplay_games_per_iter = 128 * factor
+    selfplay_report_interval = 128 * factor // 8
+    selfplay_batch_size = 128
     selfplay_game_concurrency = 32
     selfplay_batch_timeout_ms = 1
-    selfplay_num_simulations = 800
+    selfplay_num_simulations = 100
+    selfplay_expansion_batch_size = 2
+    selfplay_c_puct = 3.0
 
     # Training configuration
     train_config = TrainingConfig(
@@ -90,6 +93,15 @@ def main() -> None:
         device=device,
         checkpoint_dir=Path("checkpoints"),
         save_every_n_epochs=5,
+        # Arena evaluation
+        arena_enabled=True,
+        arena_vs_alphabeta=True,
+        arena_vs_random=True,
+        arena_games=10,
+        arena_mcts_sims=400,
+        arena_alphabeta_temperature=0.5,  # Add diversity vs deterministic opponent
+        arena_random_temperature=0.0,  # Deterministic vs random opponent
+        arena_device=None,  # Use training device
     )
 
     # Model configuration
@@ -143,6 +155,15 @@ def main() -> None:
                 "channels": model_channels,
                 "num_blocks": model_num_blocks,
             },
+            arena_config={
+                "enabled": train_config.arena_enabled,
+                "vs_alphabeta": train_config.arena_vs_alphabeta,
+                "vs_random": train_config.arena_vs_random,
+                "games": train_config.arena_games,
+                "mcts_sims": train_config.arena_mcts_sims,
+                "alphabeta_temperature": train_config.arena_alphabeta_temperature,
+                "random_temperature": train_config.arena_random_temperature,
+            },
             paths={
                 "data_base_dir": data_base_dir,
                 "models_dir": models_dir,
@@ -171,6 +192,8 @@ def main() -> None:
                 ),
                 mcts=MctsConfigArgs(
                     num_simulations=selfplay_num_simulations,
+                    c_puct=selfplay_c_puct,
+                    expansion_batch_size=selfplay_expansion_batch_size,
                 ),
                 model_path=str(current_model_path),
                 device=device,
