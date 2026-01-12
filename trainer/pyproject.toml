@@ -13,6 +13,7 @@ dependencies = [
     "reversi-zero-rs",
     "rich>=14.2.0",
     "torch==2.9.0",
+    "rust-reversi>=1.4.4",
 ]
 
 [tool.uv.sources]
