@@ -2,6 +2,8 @@
 AlphaZero training loop implementation.
 """
 
+import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generator, Literal
@@ -9,6 +11,7 @@ from typing import Generator, Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from rust_reversi import Arena
 from torch.optim import AdamW, Optimizer
 from torch.utils.data import DataLoader
 
@@ -34,6 +37,18 @@ class TrainingConfig:
     # Checkpointing
     checkpoint_dir: Path | str = "checkpoints"
     save_every_n_epochs: int = 1
+
+    # Arena evaluation
+    arena_enabled: bool = False  # Disabled by default (enable in train_main.py)
+    arena_vs_alphabeta: bool = True  # Evaluate vs Alpha-Beta
+    arena_vs_random: bool = True  # Evaluate vs Random
+    arena_games: int = 20
+    arena_mcts_sims: int = 400
+    arena_alphabeta_temperature: float = (
+        0.5  # Temperature for vs Alpha-Beta (for diversity)
+    )
+    arena_random_temperature: float = 0.0  # Temperature for vs Random (deterministic)
+    arena_device: str | None = None  # None = use training device
 
     def __post_init__(self) -> None:
         self.checkpoint_dir = Path(self.checkpoint_dir)
@@ -242,6 +257,123 @@ class AlphaZeroTrainer:
             "eval/value_correlation": value_correlation,
         }
 
+    def _evaluate_vs_opponent(
+        self, opponent_script: str, metric_prefix: str, temperature: float = 0.0
+    ) -> dict[str, float]:
+        """
+        Evaluate current model against an opponent using Arena.
+
+        Args:
+            opponent_script: Name of opponent script (e.g., "alpha_beta_player.py")
+            metric_prefix: Prefix for metrics (e.g., "alphabeta", "random")
+            temperature: Temperature for MCTS policy sampling (0.0 = deterministic)
+
+        Returns:
+            Dictionary of arena evaluation metrics.
+        """
+        # Export current model to temporary TorchScript file
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp_model_file:
+            tmp_model_path = Path(tmp_model_file.name)
+
+        try:
+            # Export model
+            self.model.eval()
+            dummy_input = torch.randn(1, 3, 8, 8, device=self.device)
+            traced_model = torch.jit.trace(self.model, dummy_input)
+            if not isinstance(traced_model, torch.jit.ScriptModule):
+                return {f"eval/arena_{metric_prefix}_error": 1.0}
+            traced_model.save(str(tmp_model_path))
+
+            # Get player script paths
+            # __file__ is trainer/src/reversi_zero_trainer/training.py
+            # We need to go to trainer/players/
+            players_dir = Path(__file__).parent.parent.parent / "players"
+            mcts_player_script = players_dir / "mcts_player.py"
+            opponent_player_script = players_dir / opponent_script
+
+            # Determine device for arena
+            arena_device = (
+                self.config.arena_device
+                if self.config.arena_device
+                else self.config.device
+            )
+
+            # Build player commands
+            mcts_cmd = [
+                sys.executable,
+                str(mcts_player_script),
+                "--model",
+                str(tmp_model_path),
+                "--device",
+                arena_device,
+                "--sims",
+                str(self.config.arena_mcts_sims),
+                "--temperature",
+                str(temperature),
+            ]
+
+            opponent_cmd = [sys.executable, str(opponent_player_script)]
+
+            # Run arena evaluation
+            arena = Arena(mcts_cmd, opponent_cmd, show_progress=False)
+            arena.play_n(self.config.arena_games)
+
+            # Get results
+            mcts_wins, opponent_wins, draws = arena.get_stats()
+            total_games = self.config.arena_games
+
+            return {
+                f"eval/arena_{metric_prefix}_win_rate": mcts_wins / total_games,
+                f"eval/arena_{metric_prefix}_loss_rate": opponent_wins / total_games,
+                f"eval/arena_{metric_prefix}_draw_rate": draws / total_games,
+                f"eval/arena_{metric_prefix}_wins": float(mcts_wins),
+                f"eval/arena_{metric_prefix}_losses": float(opponent_wins),
+                f"eval/arena_{metric_prefix}_draws": float(draws),
+            }
+
+        finally:
+            # Clean up temporary model file
+            if tmp_model_path.exists():
+                tmp_model_path.unlink()
+
+    def evaluate_vs_alphabeta(self) -> dict[str, float]:
+        """
+        Evaluate current model against Alpha-Beta baseline using Arena.
+
+        Uses temperature > 0 to introduce diversity in play, since both players
+        are deterministic and would otherwise replay the same games.
+
+        Returns:
+            Dictionary of arena evaluation metrics (win rate, draw rate, etc).
+        """
+        if not self.config.arena_enabled or not self.config.arena_vs_alphabeta:
+            return {}
+
+        return self._evaluate_vs_opponent(
+            "alpha_beta_player.py",
+            "alphabeta",
+            temperature=self.config.arena_alphabeta_temperature,
+        )
+
+    def evaluate_vs_random(self) -> dict[str, float]:
+        """
+        Evaluate current model against Random player using Arena.
+
+        Uses temperature = 0 for deterministic best-move selection, since
+        random player already provides sufficient diversity.
+
+        Returns:
+            Dictionary of arena evaluation metrics (win rate, draw rate, etc).
+        """
+        if not self.config.arena_enabled or not self.config.arena_vs_random:
+            return {}
+
+        return self._evaluate_vs_opponent(
+            "random_player.py",
+            "random",
+            temperature=self.config.arena_random_temperature,
+        )
+
     def save_checkpoint(self, epoch: int, filename: str | None = None) -> Path:
         """
         Save model checkpoint.
@@ -334,10 +466,18 @@ class AlphaZeroTrainer:
             # Evaluate
             eval_metrics = self.evaluate(dataloader)
 
+            # Arena evaluations (only on last epoch to save time)
+            arena_metrics = {}
+            if epoch == num_epochs - 1:
+                alphabeta_metrics = self.evaluate_vs_alphabeta()
+                random_metrics = self.evaluate_vs_random()
+                arena_metrics = {**alphabeta_metrics, **random_metrics}
+
             # Combine metrics
             metrics = {
                 **train_metrics,
                 **eval_metrics,
+                **arena_metrics,
                 "epoch": self.total_epochs_trained,
                 "batch_step": self.batch_step,
             }
