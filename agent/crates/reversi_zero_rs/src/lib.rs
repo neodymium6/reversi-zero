@@ -5,7 +5,8 @@ use std::time::Duration;
 use pyo3::prelude::*;
 use rayon::ThreadPool;
 use rayon::prelude::*;
-use reversi_mcts::{BatchingModel, MctsConfig};
+use reversi_core::{Board, Turn};
+use reversi_mcts::{BatchingModel, Mcts, MctsConfig};
 use reversi_nn::NnModel;
 use reversi_selfplay::{
     GameRecord, GameResult, game_to_training_examples, play_game,
@@ -115,6 +116,72 @@ pub struct SelfPlayStats {
     pub avg_game_length: f32,
     #[pyo3(get)]
     pub positions_generated: u64,
+}
+
+#[pyclass]
+pub struct MctsPlayer {
+    model: NnModel,
+    config: MctsConfig,
+}
+
+#[pymethods]
+impl MctsPlayer {
+    #[new]
+    #[pyo3(signature = (model_path, device=None, mcts=None))]
+    pub fn new(
+        model_path: String,
+        device: Option<String>,
+        mcts: Option<MctsConfigArgs>,
+    ) -> PyResult<Self> {
+        let device = match device.as_deref().map(|s| s.to_ascii_lowercase()) {
+            Some(ref d) if d == "cpu" => Device::Cpu,
+            Some(ref d) if d == "cuda" || d == "gpu" => Device::cuda_if_available(),
+            Some(other) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown device '{other}', expected 'cpu' or 'cuda'"
+                )));
+            }
+            None => Device::cuda_if_available(),
+        };
+
+        let config = build_eval_mcts_config(mcts)?;
+
+        let model = NnModel::load(&model_path, device).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to load model from {model_path}: {e}"
+            ))
+        })?;
+
+        Ok(Self { model, config })
+    }
+
+    /// Select a move for the given board string and turn.
+    ///
+    /// Args:
+    ///     board_str: Board representation compatible with rust_reversi_core.
+    ///     turn: "BLACK" or "WHITE".
+    ///
+    /// Returns:
+    ///     int: best move index (0-63). Returns -1 if no move is found.
+    pub fn select_move(&self, board_str: String, turn: String) -> PyResult<i32> {
+        let turn = parse_turn_str(&turn)?;
+
+        let mut board = Board::new();
+        if let Err(e) = board.set_board_str(&board_str, turn) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!("{e:?}")));
+        }
+
+        // Initialize a fresh MCTS tree for each call to avoid sync issues.
+        let mut mcts = Mcts::new();
+        let result = match mcts.search(&board, &self.model, &self.config) {
+            Ok(res) => res,
+            Err(e) => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+            }
+        };
+
+        Ok(result.best_move.map_or(-1, |m| m as i32))
+    }
 }
 
 /// Stream self-play games in batches, yielding stats after each batch.
@@ -411,6 +478,7 @@ fn reversi_zero_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<MctsConfigArgs>()?;
     m.add_class::<SelfPlayStream>()?;
     m.add_class::<SelfPlayStats>()?;
+    m.add_class::<MctsPlayer>()?;
     Ok(())
 }
 
@@ -447,4 +515,38 @@ fn default_batch_size(game_concurrency: u32) -> u32 {
 
 fn clamp_timeout(ms: u64) -> u64 {
     ms.clamp(1, 500)
+}
+
+fn parse_turn_str(s: &str) -> PyResult<Turn> {
+    match s.to_ascii_uppercase().as_str() {
+        "BLACK" | "B" => Ok(Turn::Black),
+        "WHITE" | "W" => Ok(Turn::White),
+        other => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Unknown turn '{other}', expected BLACK or WHITE"
+        ))),
+    }
+}
+
+fn build_eval_mcts_config(args: Option<MctsConfigArgs>) -> PyResult<MctsConfig> {
+    let mut config = MctsConfig::default();
+    if let Some(a) = args {
+        if let Some(s) = a.num_simulations {
+            config = config.with_simulations(s);
+        }
+        if let Some(c) = a.c_puct {
+            config = config.with_c_puct(c);
+        }
+        if let Some(t) = a.temperature {
+            config = config.with_temperature(t);
+        }
+        if let Some(alpha) = a.dirichlet_alpha {
+            let epsilon = a.dirichlet_epsilon.unwrap_or(0.25);
+            config = config.with_dirichlet_noise(alpha, epsilon);
+        } else if let Some(epsilon) = a.dirichlet_epsilon {
+            let alpha = a.dirichlet_alpha.unwrap_or(0.3);
+            config = config.with_dirichlet_noise(alpha, epsilon);
+        }
+    }
+
+    Ok(config)
 }

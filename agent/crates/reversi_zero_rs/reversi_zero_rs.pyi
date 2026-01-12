@@ -93,3 +93,16 @@ class SelfPlayStream:
 
     def __iter__(self) -> Iterator[SelfPlayStats]: ...
     def __next__(self) -> SelfPlayStats: ...
+
+class MctsPlayer:
+    """MCTS-based player for evaluation/Arena."""
+
+    def __init__(
+        self,
+        model_path: str,
+        device: Optional[str] = None,
+        mcts: Optional[MctsConfigArgs] = None,
+    ) -> None: ...
+
+    def select_move(self, board_str: str, turn: str) -> int:
+        """Return best move index (0-63). Returns -1 when no move is available."""
