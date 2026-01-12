@@ -49,7 +49,7 @@ fn puct_value(tree: &MctsTree, node_id: NodeId, sqrt_parent: f32, c_puct: f32) -
     let node = &tree.nodes[node_id];
 
     // Q value (exploitation)
-    let q = node.q_value();
+    let q = -node.q_value();
 
     // U value (exploration)
     let u = c_puct * node.prior_probability * sqrt_parent / (1.0 + node.visit_count as f32);
@@ -107,9 +107,9 @@ mod tests {
         let sqrt_parent = (tree.nodes[0].visit_count as f32).sqrt();
         let puct = puct_value(&tree, 1, sqrt_parent, 1.5);
 
-        // Q = 5.0 / 10 = 0.5
+        // Q = -(5.0 / 10) = -0.5 (negated for minimax)
         // U = 1.5 * 0.5 * 10 / (1 + 10) ≈ 0.682
-        // PUCT ≈ 1.182
-        assert!((puct - 1.182).abs() < 0.01);
+        // PUCT ≈ 0.182
+        assert!((puct - 0.182).abs() < 0.01);
     }
 }
