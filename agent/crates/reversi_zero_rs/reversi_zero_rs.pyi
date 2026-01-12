@@ -10,6 +10,7 @@ class MctsConfigArgs:
     temperature: Optional[float]
     dirichlet_alpha: Optional[float]
     dirichlet_epsilon: Optional[float]
+    expansion_batch_size: Optional[int]
 
     def __init__(
         self,
@@ -18,6 +19,7 @@ class MctsConfigArgs:
         temperature: Optional[float] = None,
         dirichlet_alpha: Optional[float] = None,
         dirichlet_epsilon: Optional[float] = None,
+        expansion_batch_size: Optional[int] = None,
     ) -> None: ...
 
 class BatchConfigArgs:

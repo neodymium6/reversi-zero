@@ -26,18 +26,21 @@ pub struct MctsConfigArgs {
     pub dirichlet_alpha: Option<f32>,
     #[pyo3(get, set)]
     pub dirichlet_epsilon: Option<f32>,
+    #[pyo3(get, set)]
+    pub expansion_batch_size: Option<u32>,
 }
 
 #[pymethods]
 impl MctsConfigArgs {
     #[new]
-    #[pyo3(signature = (num_simulations=None, c_puct=None, temperature=None, dirichlet_alpha=None, dirichlet_epsilon=None))]
+    #[pyo3(signature = (num_simulations=None, c_puct=None, temperature=None, dirichlet_alpha=None, dirichlet_epsilon=None, expansion_batch_size=None))]
     fn new(
         num_simulations: Option<u32>,
         c_puct: Option<f32>,
         temperature: Option<f32>,
         dirichlet_alpha: Option<f32>,
         dirichlet_epsilon: Option<f32>,
+        expansion_batch_size: Option<u32>,
     ) -> Self {
         Self {
             num_simulations,
@@ -45,6 +48,7 @@ impl MctsConfigArgs {
             temperature,
             dirichlet_alpha,
             dirichlet_epsilon,
+            expansion_batch_size,
         }
     }
 }
@@ -209,8 +213,11 @@ impl SelfPlayStream {
             Duration::from_millis(batch_timeout_ms),
         );
 
+        // MCTS expansion batch size - should be smaller than NN batch_size to avoid determinism
+        let expansion_batch_size = mcts.expansion_batch_size.unwrap_or(4);
+
         let mut config = MctsConfig::default()
-            .with_batch_size(batch_size)
+            .with_batch_size(expansion_batch_size)
             .with_batch_timeout_ms(batch_timeout_ms);
 
         if let Some(sims) = mcts.num_simulations {
