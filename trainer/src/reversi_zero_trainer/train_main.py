@@ -34,9 +34,16 @@ from reversi_zero_trainer.evaluate_main import (
     run as run_model_evaluation,
     write_report as write_evaluation_report,
 )
+from reversi_zero_trainer.hydra_config import (
+    materialize_train_config,
+    register_train_config,
+)
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
 from reversi_zero_trainer.runtime import configure_training_threads
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
+
+
+register_train_config()
 
 
 @dataclass(frozen=True)
@@ -568,45 +575,46 @@ def export_model_to_torchscript(
 
 def run_config_from_hydra(config: DictConfig) -> RunConfig:
     """Convert Hydra's nested application config into the training domain config."""
+    typed = materialize_train_config(config)
     return RunConfig(
-        run_dir=Path(config.run.dir) if config.run.dir is not None else None,
-        resume=config.run.resume,
-        num_iterations=config.run.num_iterations,
-        device=config.hardware.device,
-        seed=config.run.seed,
-        torch_threads=config.hardware.torch_threads,
-        selfplay_games_per_iter=config.selfplay.games_per_iteration,
-        selfplay_report_interval=config.selfplay.report_interval,
-        selfplay_batch_size=config.selfplay.batch_size,
-        selfplay_game_concurrency=config.selfplay.game_concurrency,
-        selfplay_batch_timeout_ms=config.selfplay.batch_timeout_ms,
-        selfplay_num_simulations=config.selfplay.simulations,
-        selfplay_expansion_batch_size=config.selfplay.expansion_batch_size,
-        selfplay_c_puct=config.selfplay.c_puct,
-        inference_dtype=config.hardware.inference_dtype,
-        train_batch_size=config.training.batch_size,
-        train_num_workers=config.training.num_workers,
-        train_num_epochs=config.training.epochs,
-        train_replay_window=config.training.replay_window,
-        train_symmetry_augmentation=config.training.symmetry_augmentation,
-        train_learning_rate=config.training.learning_rate,
-        train_weight_decay=config.training.weight_decay,
-        policy_loss_weight=config.training.policy_loss_weight,
-        value_loss_weight=config.training.value_loss_weight,
-        reference_eval_enabled=config.reference.enabled,
-        reference_games=config.reference.games,
-        promotion_enabled=config.promotion.enabled,
-        promotion_num_openings=config.promotion.openings,
-        promotion_opening_plies=config.promotion.opening_plies,
-        promotion_seed=config.promotion.seed,
-        promotion_mcts_sims=config.promotion.simulations,
-        promotion_c_puct=config.promotion.c_puct,
-        promotion_expansion_batch_size=config.promotion.expansion_batch_size,
-        promotion_threshold=config.promotion.threshold,
-        promotion_require_confidence=config.promotion.require_confidence,
-        model_type=config.model.type,
-        model_channels=config.model.channels,
-        model_num_blocks=config.model.blocks,
+        run_dir=Path(typed.run.dir) if typed.run.dir is not None else None,
+        resume=typed.run.resume,
+        num_iterations=typed.run.num_iterations,
+        device=typed.hardware.device.value,
+        seed=typed.run.seed,
+        torch_threads=typed.hardware.torch_threads,
+        selfplay_games_per_iter=typed.selfplay.games_per_iteration,
+        selfplay_report_interval=typed.selfplay.report_interval,
+        selfplay_batch_size=typed.selfplay.batch_size,
+        selfplay_game_concurrency=typed.selfplay.game_concurrency,
+        selfplay_batch_timeout_ms=typed.selfplay.batch_timeout_ms,
+        selfplay_num_simulations=typed.selfplay.simulations,
+        selfplay_expansion_batch_size=typed.selfplay.expansion_batch_size,
+        selfplay_c_puct=typed.selfplay.c_puct,
+        inference_dtype=typed.hardware.inference_dtype.value,
+        train_batch_size=typed.training.batch_size,
+        train_num_workers=typed.training.num_workers,
+        train_num_epochs=typed.training.epochs,
+        train_replay_window=typed.training.replay_window,
+        train_symmetry_augmentation=typed.training.symmetry_augmentation.value,
+        train_learning_rate=typed.training.learning_rate,
+        train_weight_decay=typed.training.weight_decay,
+        policy_loss_weight=typed.training.policy_loss_weight,
+        value_loss_weight=typed.training.value_loss_weight,
+        reference_eval_enabled=typed.reference.enabled,
+        reference_games=typed.reference.games,
+        promotion_enabled=typed.promotion.enabled,
+        promotion_num_openings=typed.promotion.openings,
+        promotion_opening_plies=typed.promotion.opening_plies,
+        promotion_seed=typed.promotion.seed,
+        promotion_mcts_sims=typed.promotion.simulations,
+        promotion_c_puct=typed.promotion.c_puct,
+        promotion_expansion_batch_size=typed.promotion.expansion_batch_size,
+        promotion_threshold=typed.promotion.threshold,
+        promotion_require_confidence=typed.promotion.require_confidence,
+        model_type=typed.model.type.value,
+        model_channels=typed.model.channels,
+        model_num_blocks=typed.model.blocks,
     )
 
 

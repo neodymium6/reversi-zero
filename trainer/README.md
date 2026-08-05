@@ -40,6 +40,8 @@ Passing an existing directory without `run.resume=true` is an error.
 
 Configuration is composed by Hydra. Select `profile=auto|cpu|gpu` and
 `model=dummy|resnet`, then override individual values with `section.key=value`.
+The structured schema rejects unknown keys, invalid types, unsupported devices,
+inference dtypes, model types, and symmetry multipliers before training starts.
 Use `../scripts/train --help` for the complete config and
 `../scripts/train --cfg job` to print the resolved application config without
 starting a run.

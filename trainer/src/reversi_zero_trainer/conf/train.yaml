@@ -1,56 +1,10 @@
 defaults:
-  - _self_
+  - train_schema
   - profile: auto
   - model: dummy
+  - _self_
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
-
-run:
-  dir: null
-  resume: false
-  num_iterations: 10
-  seed: 0
-
-hardware:
-  device: auto
-  torch_threads: null
-  inference_dtype: auto
-
-selfplay:
-  games_per_iteration: 128
-  report_interval: null
-  batch_size: null
-  game_concurrency: null
-  batch_timeout_ms: 1
-  simulations: 100
-  expansion_batch_size: 4
-  c_puct: 3.0
-
-training:
-  batch_size: 256
-  num_workers: null
-  epochs: 10
-  replay_window: 5
-  symmetry_augmentation: 8
-  learning_rate: 0.001
-  weight_decay: 0.0001
-  policy_loss_weight: 1.0
-  value_loss_weight: 1.0
-
-reference:
-  enabled: true
-  games: 40
-
-promotion:
-  enabled: true
-  openings: 40
-  opening_plies: 8
-  seed: 0
-  simulations: null
-  c_puct: 1.5
-  expansion_batch_size: null
-  threshold: 0.55
-  require_confidence: true
 
 hydra:
   run:

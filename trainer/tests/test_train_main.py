@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from hydra.errors import ConfigCompositionException
 
 import reversi_zero_trainer.train_main as train_main
 from reversi_zero_trainer.train_main import (
@@ -149,6 +150,28 @@ def test_hydra_profile_selects_device(profile, device):
     config = compose_run_config([f"profile={profile}"])
 
     assert config.device == device
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "hardware.device=banana",
+        "hardware.inference_dtype=bfloat16",
+        "model.type=other",
+        "training.symmetry_augmentation=3",
+        "training.epochs=abc",
+        "reference.enabled=maybe",
+        "selfplay.simmulations=10",
+    ],
+)
+def test_hydra_schema_rejects_invalid_overrides(override):
+    with pytest.raises(ConfigCompositionException):
+        compose_run_config([override])
+
+
+def test_hydra_conversion_rejects_explicit_unknown_keys():
+    with pytest.raises(ValueError, match="selfplay.simmulations"):
+        compose_run_config(["+selfplay.simmulations=10"])
 
 
 def test_run_config_rejects_invalid_symmetry_augmentation():
