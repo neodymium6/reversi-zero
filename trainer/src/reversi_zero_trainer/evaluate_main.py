@@ -94,6 +94,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--opening-plies", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=1,
+        help="Torch CPU threads per MCTS player process (default: 1)",
+    )
     parser.add_argument("--simulations", type=int, default=400)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--alphabeta-depth", type=int, default=3)
@@ -109,6 +115,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--opening-plies must be non-negative")
     if args.simulations <= 0:
         parser.error("--simulations must be positive")
+    if args.torch_threads <= 0:
+        parser.error("--torch-threads must be positive")
     if args.alphabeta_depth <= 0:
         parser.error("--alphabeta-depth must be positive")
     if not 0.0 <= args.promotion_threshold <= 1.0:
@@ -122,6 +130,7 @@ def _mcts_command(
     device: str,
     simulations: int,
     c_puct: float,
+    torch_threads: int,
 ) -> list[str]:
     players_dir = Path(__file__).resolve().parents[2] / "players"
     command = [
@@ -138,13 +147,14 @@ def _mcts_command(
         "--openings-file",
         str(openings_path),
     ]
-    if device != "auto":
-        command.extend(["--device", device])
+    command.extend(["--device", device])
+    if device == "cpu":
+        command.extend(["--torch-threads", str(torch_threads)])
     return command
 
 
 def _reference_command(
-    args: argparse.Namespace, openings_path: Path
+    args: argparse.Namespace, openings_path: Path, actual_device: str
 ) -> tuple[list[str], dict[str, Any]]:
     players_dir = Path(__file__).resolve().parents[2] / "players"
     if args.reference_model is not None:
@@ -153,7 +163,12 @@ def _reference_command(
             raise FileNotFoundError(f"Reference model not found: {model}")
         return (
             _mcts_command(
-                model, openings_path, args.device, args.simulations, args.c_puct
+                model,
+                openings_path,
+                actual_device,
+                args.simulations,
+                args.c_puct,
+                args.torch_threads,
             ),
             {"type": "model", "path": str(model), "sha256": file_sha256(model)},
         )
@@ -187,6 +202,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not challenger.is_file():
         raise FileNotFoundError(f"Challenger model not found: {challenger}")
 
+    actual_device = (
+        "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
+    )
+    if actual_device == "auto":
+        actual_device = "cpu"
     if args.openings_from is not None:
         openings = load_openings(args.openings_from)
         opening_source = str(args.openings_from.resolve())
@@ -200,11 +220,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         challenger_command = _mcts_command(
             challenger,
             openings_path,
-            args.device,
+            actual_device,
             args.simulations,
             args.c_puct,
+            args.torch_threads,
         )
-        reference_command, reference_metadata = _reference_command(args, openings_path)
+        reference_command, reference_metadata = _reference_command(
+            args, openings_path, actual_device
+        )
 
         arena = Arena(
             challenger_command, reference_command, show_progress=args.show_progress
@@ -217,11 +240,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     score = (wins + 0.5 * draws) / games
     interval_low, interval_high = score_interval(wins, losses, draws)
     statistically_stronger = score >= args.promotion_threshold and interval_low > 0.5
-    actual_device = (
-        "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
-    )
-    if actual_device == "auto":
-        actual_device = "cpu"
     opening_lengths = sorted({len(opening.moves) for opening in openings})
 
     return {
@@ -235,6 +253,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "reference": reference_metadata,
         "config": {
             "device": actual_device,
+            "torch_threads": args.torch_threads if actual_device == "cpu" else None,
             "simulations": args.simulations,
             "c_puct": args.c_puct,
             "temperature": 0.0,

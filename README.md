@@ -138,6 +138,10 @@ Each opening is played twice with colors swapped. Evaluation uses
 an approximate 95% confidence interval. The report contains the exact opening
 suite and can be reused in another comparison:
 
+On CPU, each Arena MCTS process uses one Torch thread by default to avoid
+oversubscribing the machine. Use `--torch-threads N` to override this when
+benchmarking a dedicated host; CUDA evaluation keeps Torch's normal defaults.
+
 ```bash
 ./scripts/evaluate \
   --challenger path/to/challenger.pt \

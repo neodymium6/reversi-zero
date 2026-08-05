@@ -1,7 +1,9 @@
 import pytest
 
 from reversi_zero_trainer.evaluate_main import (
+    _mcts_command,
     opening_suite_sha256,
+    parse_args,
     score_interval,
     write_report,
 )
@@ -35,3 +37,44 @@ def test_write_report_is_atomic_and_refuses_overwrite(tmp_path):
     assert not (tmp_path / ".evaluation.json.next").exists()
     with pytest.raises(FileExistsError, match="Refusing to overwrite"):
         write_report({"summary": {}}, output)
+
+
+def test_cpu_mcts_command_limits_torch_threads(tmp_path):
+    command = _mcts_command(
+        tmp_path / "model.pt",
+        tmp_path / "openings.json",
+        "cpu",
+        simulations=25,
+        c_puct=1.5,
+        torch_threads=2,
+    )
+
+    assert command[-4:] == ["--device", "cpu", "--torch-threads", "2"]
+
+
+def test_cuda_mcts_command_does_not_override_torch_threads(tmp_path):
+    command = _mcts_command(
+        tmp_path / "model.pt",
+        tmp_path / "openings.json",
+        "cuda",
+        simulations=25,
+        c_puct=1.5,
+        torch_threads=1,
+    )
+
+    assert "--torch-threads" not in command
+
+
+def test_evaluation_rejects_non_positive_torch_threads(tmp_path):
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--challenger",
+                str(tmp_path / "model.pt"),
+                "--reference-random",
+                "--output",
+                str(tmp_path / "report.json"),
+                "--torch-threads",
+                "0",
+            ]
+        )

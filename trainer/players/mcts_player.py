@@ -18,6 +18,14 @@ from pathlib import Path
 import torch
 from reversi_zero_rs import MctsConfigArgs, MctsPlayer
 from reversi_zero_trainer.openings import OpeningController
+from reversi_zero_trainer.runtime import configure_mcts_player_threads
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional fixed opening suite used by paired Arena evaluation",
     )
+    parser.add_argument(
+        "--torch-threads",
+        type=positive_int,
+        help="Torch CPU threads for this process (default: 1 on CPU)",
+    )
     return parser.parse_args()
 
 
@@ -73,6 +86,7 @@ def main() -> None:
 
     if args.device is None:
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
+    configure_mcts_player_threads(args.device, args.torch_threads)
     player = MctsPlayer(str(model_path), device=args.device, mcts=mcts_args)
     color = args.color.upper()
     openings = OpeningController(args.openings_file) if args.openings_file else None

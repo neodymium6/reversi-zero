@@ -49,6 +49,10 @@ openings:
   --output runs/experiment-001/evaluations/iter2-vs-iter0.json
 ```
 
+CPU evaluation limits each Arena MCTS process to one Torch thread by default,
+preventing the concurrent player processes from oversubscribing the machine.
+This can be overridden with `--torch-threads N`; CUDA keeps Torch's defaults.
+
 Use `../scripts/evaluate --help` for fixed Alpha-Beta/Random references,
 opening-suite reuse, search settings, and promotion thresholds.
 
