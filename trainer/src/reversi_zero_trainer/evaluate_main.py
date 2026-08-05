@@ -102,6 +102,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--simulations", type=int, default=400)
     parser.add_argument("--c-puct", type=float, default=1.5)
+    parser.add_argument("--challenger-expansion-batch-size", type=int, default=1)
+    parser.add_argument("--reference-expansion-batch-size", type=int, default=1)
     parser.add_argument("--alphabeta-depth", type=int, default=3)
     parser.add_argument("--promotion-threshold", type=float, default=0.55)
     parser.add_argument(
@@ -117,6 +119,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--simulations must be positive")
     if args.torch_threads <= 0:
         parser.error("--torch-threads must be positive")
+    if args.challenger_expansion_batch_size <= 0:
+        parser.error("--challenger-expansion-batch-size must be positive")
+    if args.reference_expansion_batch_size <= 0:
+        parser.error("--reference-expansion-batch-size must be positive")
     if args.alphabeta_depth <= 0:
         parser.error("--alphabeta-depth must be positive")
     if not 0.0 <= args.promotion_threshold <= 1.0:
@@ -131,6 +137,7 @@ def _mcts_command(
     simulations: int,
     c_puct: float,
     torch_threads: int,
+    expansion_batch_size: int,
 ) -> list[str]:
     players_dir = Path(__file__).resolve().parents[2] / "players"
     command = [
@@ -146,6 +153,8 @@ def _mcts_command(
         "0.0",
         "--openings-file",
         str(openings_path),
+        "--expansion-batch-size",
+        str(expansion_batch_size),
     ]
     command.extend(["--device", device])
     if device == "cpu":
@@ -169,6 +178,7 @@ def _reference_command(
                 args.simulations,
                 args.c_puct,
                 args.torch_threads,
+                args.reference_expansion_batch_size,
             ),
             {"type": "model", "path": str(model), "sha256": file_sha256(model)},
         )
@@ -224,6 +234,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             args.simulations,
             args.c_puct,
             args.torch_threads,
+            args.challenger_expansion_batch_size,
         )
         reference_command, reference_metadata = _reference_command(
             args, openings_path, actual_device
@@ -257,6 +268,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "simulations": args.simulations,
             "c_puct": args.c_puct,
             "temperature": 0.0,
+            "challenger_expansion_batch_size": (args.challenger_expansion_batch_size),
+            "reference_expansion_batch_size": (
+                args.reference_expansion_batch_size
+                if args.reference_model is not None
+                else None
+            ),
             "opening_source": opening_source,
             "opening_seed": args.seed if args.openings_from is None else None,
             "opening_plies": (

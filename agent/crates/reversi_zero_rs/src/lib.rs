@@ -539,6 +539,9 @@ fn build_eval_mcts_config(args: Option<MctsConfigArgs>) -> PyResult<MctsConfig> 
         if let Some(t) = a.temperature {
             config = config.with_temperature(t);
         }
+        if let Some(batch_size) = a.expansion_batch_size {
+            config = config.with_batch_size(batch_size);
+        }
         if let Some(alpha) = a.dirichlet_alpha {
             let epsilon = a.dirichlet_epsilon.unwrap_or(0.25);
             config = config.with_dirichlet_noise(alpha, epsilon);
@@ -549,4 +552,32 @@ fn build_eval_mcts_config(args: Option<MctsConfigArgs>) -> PyResult<MctsConfig> 
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eval_mcts_config_uses_requested_expansion_batch_size() {
+        let args = MctsConfigArgs {
+            num_simulations: None,
+            c_puct: None,
+            temperature: None,
+            dirichlet_alpha: None,
+            dirichlet_epsilon: None,
+            expansion_batch_size: Some(4),
+        };
+
+        let config = build_eval_mcts_config(Some(args)).unwrap();
+
+        assert_eq!(config.batch_size, 4);
+    }
+
+    #[test]
+    fn eval_mcts_config_keeps_single_expansion_default() {
+        let config = build_eval_mcts_config(None).unwrap();
+
+        assert_eq!(config.batch_size, 1);
+    }
 }

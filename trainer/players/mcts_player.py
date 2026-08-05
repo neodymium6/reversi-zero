@@ -62,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         help="Sampling temperature (0.0 for argmax, recommended for evaluation)",
     )
     parser.add_argument(
+        "--expansion-batch-size",
+        type=positive_int,
+        help="Maximum MCTS leaves evaluated per forward pass (default: 1)",
+    )
+    parser.add_argument(
         "--openings-file",
         type=Path,
         help="Optional fixed opening suite used by paired Arena evaluation",
@@ -82,6 +87,7 @@ def main() -> None:
         num_simulations=args.sims,
         c_puct=args.c_puct,
         temperature=args.temperature,
+        expansion_batch_size=args.expansion_batch_size,
     )
 
     if args.device is None:

@@ -47,9 +47,11 @@ def test_cpu_mcts_command_limits_torch_threads(tmp_path):
         simulations=25,
         c_puct=1.5,
         torch_threads=2,
+        expansion_batch_size=4,
     )
 
     assert command[-4:] == ["--device", "cpu", "--torch-threads", "2"]
+    assert command[command.index("--expansion-batch-size") + 1] == "4"
 
 
 def test_cuda_mcts_command_does_not_override_torch_threads(tmp_path):
@@ -60,6 +62,7 @@ def test_cuda_mcts_command_does_not_override_torch_threads(tmp_path):
         simulations=25,
         c_puct=1.5,
         torch_threads=1,
+        expansion_batch_size=2,
     )
 
     assert "--torch-threads" not in command
@@ -75,6 +78,26 @@ def test_evaluation_rejects_non_positive_torch_threads(tmp_path):
                 "--output",
                 str(tmp_path / "report.json"),
                 "--torch-threads",
+                "0",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--challenger-expansion-batch-size", "--reference-expansion-batch-size"],
+)
+def test_evaluation_rejects_non_positive_expansion_batch_size(tmp_path, flag):
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--challenger",
+                str(tmp_path / "model.pt"),
+                "--reference-model",
+                str(tmp_path / "reference.pt"),
+                "--output",
+                str(tmp_path / "report.json"),
+                flag,
                 "0",
             ]
         )

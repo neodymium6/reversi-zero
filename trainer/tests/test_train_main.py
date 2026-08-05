@@ -109,6 +109,7 @@ def test_cpu_runtime_defaults_are_tuned_for_selfplay():
     assert config.resolved_selfplay_batch_size("cpu") == 32
     assert config.resolved_selfplay_game_concurrency("cpu") == 16
     assert config.resolved_train_num_workers("cpu") == 0
+    assert config.selfplay_expansion_batch_size == 4
     assert config.report_interval() == 16
 
 

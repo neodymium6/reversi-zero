@@ -40,10 +40,10 @@ Passing an existing directory without `--resume` is an error.
 See `../scripts/train --help` for all configuration options.
 
 CPU training automatically uses four Torch threads, an NN inference batch of
-32, and up to 16 concurrent self-play games. These values avoid CPU
-oversubscription and can be overridden with `--torch-threads`,
-`--selfplay-batch-size`, and `--game-concurrency`. CUDA retains the previous
-batch and threading defaults.
+32, expansion batches of four, and up to 16 concurrent self-play games. These
+values avoid CPU oversubscription and can be overridden with `--torch-threads`,
+`--selfplay-batch-size`, `--expansion-batch-size`, and `--game-concurrency`.
+CUDA retains its previous inference-batch and threading defaults.
 
 The in-memory self-play dataset also defaults to zero DataLoader workers on
 CPU, avoiding multiprocessing startup and transfer overhead. CUDA retains four
@@ -64,7 +64,8 @@ preventing the concurrent player processes from oversubscribing the machine.
 This can be overridden with `--torch-threads N`; CUDA keeps Torch's defaults.
 
 Use `../scripts/evaluate --help` for fixed Alpha-Beta/Random references,
-opening-suite reuse, search settings, and promotion thresholds.
+opening-suite reuse, independent challenger/reference expansion batch sizes,
+search settings, and promotion thresholds.
 
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before

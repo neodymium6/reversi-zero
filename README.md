@@ -155,6 +155,10 @@ promotion threshold (55% by default) and the confidence interval lower bound
 is above 50%. Random and Alpha-Beta references are also available via
 `--reference-random` and `--reference-alphabeta`.
 
+To isolate MCTS expansion batching with the same model and search budget, pass
+`--challenger-expansion-batch-size` and
+`--reference-expansion-batch-size`. Both default to one for compatibility.
+
 ## Key Features
 
 ### MCTS Implementation
@@ -195,7 +199,7 @@ torch_threads = 4                          # CPU default; unchanged on CUDA
 
 # MCTS configuration
 selfplay_c_puct = 3.0                      # Exploration constant
-selfplay_expansion_batch_size = 2          # Expansion batch size
+selfplay_expansion_batch_size = 4          # Validated expansion batch size
 ```
 
 ### Training Parameters

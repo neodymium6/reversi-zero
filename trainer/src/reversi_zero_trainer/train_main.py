@@ -45,7 +45,7 @@ class RunConfig:
     selfplay_game_concurrency: int | None = None
     selfplay_batch_timeout_ms: int = 1
     selfplay_num_simulations: int = 100
-    selfplay_expansion_batch_size: int = 2
+    selfplay_expansion_batch_size: int = 4
     selfplay_c_puct: float = 3.0
 
     train_batch_size: int = 256
@@ -311,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-timeout-ms", type=int, default=1)
     parser.add_argument("--simulations", type=int, default=100)
-    parser.add_argument("--expansion-batch-size", type=int, default=2)
+    parser.add_argument("--expansion-batch-size", type=int, default=4)
     parser.add_argument("--c-puct", type=float, default=3.0)
 
     parser.add_argument("--train-batch-size", type=int, default=256)
