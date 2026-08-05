@@ -14,6 +14,8 @@ const BITS: [u64; 64] = {
     bits
 };
 
+pub const BOARD_FEATURE_COUNT: usize = 3 * 8 * 8;
+
 pub struct Board {
     inner: rrcBoard,
 }
@@ -33,11 +35,10 @@ impl Default for Board {
 }
 
 impl Board {
-    pub fn to_tensor(&self) -> Tensor {
-        const PLANES: usize = 3;
+    pub fn to_features(&self) -> [f32; BOARD_FEATURE_COUNT] {
         const SIZE: usize = 8;
         const NUMEL_PER_PLANE: usize = SIZE * SIZE;
-        let mut board_array = [0f32; PLANES * NUMEL_PER_PLANE];
+        let mut board_array = [0f32; BOARD_FEATURE_COUNT];
         let (player_board, opponent_board, _) = self.inner.get_board();
         for x in 0..SIZE {
             for y in 0..SIZE {
@@ -57,7 +58,11 @@ impl Board {
                 }
             }
         }
-        Tensor::from_slice(&board_array).view([PLANES as i64, SIZE as i64, SIZE as i64])
+        board_array
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        Tensor::from_slice(&self.to_features()).view([3, 8, 8])
     }
 
     // Thin wrappers for MCTS to access game logic

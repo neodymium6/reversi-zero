@@ -50,6 +50,16 @@ The in-memory self-play dataset also defaults to zero DataLoader workers on
 CPU, avoiding multiprocessing startup and transfer overhead. CUDA retains four
 workers. Use `--num-workers N` to override either default.
 
+CUDA runs export self-play TorchScript models in FP16 by default while retaining
+FP32 training weights and checkpoints. CPU runs automatically use FP32:
+
+```bash
+../scripts/train --device cuda
+```
+
+The Rust inference boundary remains FP32; casting is contained inside the
+exported model. Use `--inference-dtype float32` to override the CUDA default.
+
 Evaluate a trained snapshot against its initial model with fixed paired
 openings:
 

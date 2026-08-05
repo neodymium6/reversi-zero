@@ -32,6 +32,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["selfplay_batch_size"] == 32
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
     assert stored["train_num_workers"] == 0
+    assert stored["inference_dtype"] == "float32"
 
 
 def test_prepare_run_refuses_existing_directory_without_resume(tmp_path):
@@ -90,6 +91,8 @@ def test_parse_args_maps_training_options():
             "3",
             "--model",
             "resnet",
+            "--inference-dtype",
+            "float16",
             "--no-arena",
         ]
     )
@@ -99,7 +102,22 @@ def test_parse_args_maps_training_options():
     assert config.selfplay_games_per_iter == 16
     assert config.train_num_epochs == 3
     assert config.model_type == "resnet"
+    assert config.inference_dtype == "float16"
     assert not config.arena_enabled
+
+
+def test_float16_inference_requires_cuda():
+    config = RunConfig(device="cpu", inference_dtype="float16")
+
+    with pytest.raises(ValueError, match="requires CUDA"):
+        config.validate()
+
+
+def test_inference_dtype_defaults_to_float16_on_cuda_and_float32_on_cpu():
+    config = RunConfig()
+
+    assert config.resolved_inference_dtype("cuda") == "float16"
+    assert config.resolved_inference_dtype("cpu") == "float32"
 
 
 def test_cpu_runtime_defaults_are_tuned_for_selfplay():

@@ -1,18 +1,17 @@
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
-use reversi_core::Board;
+use reversi_core::{BOARD_FEATURE_COUNT, Board};
 use std::collections::HashSet;
 
 use crate::backup::backup;
 use crate::config::MctsConfig;
 use crate::dirichlet::add_dirichlet_noise_to_root;
 use crate::error::{MctsError, Result};
-use crate::evaluation::{PolicyValueModel, tensor_to_f32, tensor_to_vec_f32};
+use crate::evaluation::PolicyValueModel;
 use crate::expansion::{calculate_terminal_value, expand_and_evaluate, expand_with_policy_value};
 use crate::search_result::SearchResult;
 use crate::selection::{apply_virtual_loss, revert_virtual_loss, select};
 use crate::tree::{MctsTree, NodeId};
-use tch::Tensor;
 
 /// Monte Carlo Tree Search for Reversi using AlphaZero algorithm
 pub struct Mcts {
@@ -266,28 +265,19 @@ impl Mcts {
 
         // Evaluate pending boards in one forward pass (if any).
         if !pending.is_empty() {
-            let tensors: Vec<Tensor> = pending.iter().map(|p| p.board.to_tensor()).collect();
-            // Device placement belongs to the model boundary. Keeping these
-            // small per-search batches on CPU lets BatchingModel combine them
-            // before a single HtoD transfer.
-            let input = Tensor::stack(&tensors, 0);
-            let (policy_batch, value_batch) = model.forward(&input)?;
+            let mut features = Vec::with_capacity(pending.len() * BOARD_FEATURE_COUNT);
+            for item in &pending {
+                features.extend_from_slice(&item.board.to_features());
+            }
+            let (policy_batch, value_batch) = model.evaluate_batch(&features, pending.len())?;
 
             for (batch_idx, item) in pending.into_iter().enumerate() {
-                let policy_tensor = policy_batch.get(batch_idx as i64);
-                let value_tensor = value_batch.get(batch_idx as i64);
-
-                let policy_vec = tensor_to_vec_f32(&policy_tensor)?;
-                let value = tensor_to_f32(&value_tensor)?;
+                let policy_offset = batch_idx * 64;
+                let policy = &policy_batch[policy_offset..policy_offset + 64];
+                let value = value_batch[batch_idx];
 
                 // Expand this leaf with the evaluated policy/value
-                expand_with_policy_value(
-                    &mut self.tree,
-                    item.leaf_id,
-                    item.board,
-                    &policy_vec,
-                    value,
-                )?;
+                expand_with_policy_value(&mut self.tree, item.leaf_id, item.board, policy, value)?;
 
                 values[item.value_index] = value;
             }
@@ -308,7 +298,7 @@ mod tests {
     use super::*;
 
     use crate::tree::MctsTree;
-    use tch::{Device, Kind};
+    use tch::{Device, Kind, Tensor};
 
     struct BatchedDummyModel;
 

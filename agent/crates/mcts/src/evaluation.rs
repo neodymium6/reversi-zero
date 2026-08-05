@@ -1,4 +1,4 @@
-use reversi_core::Board;
+use reversi_core::{BOARD_FEATURE_COUNT, Board};
 use reversi_nn::NnModel;
 use tch::{Device, Tensor};
 
@@ -8,6 +8,42 @@ use crate::error::{MctsError, Result};
 pub trait PolicyValueModel {
     fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)>;
     fn device(&self) -> Device;
+
+    fn evaluate_batch(
+        &self,
+        features: &[f32],
+        batch_size: usize,
+    ) -> tch::Result<(Vec<f32>, Vec<f32>)> {
+        if batch_size == 0 || features.len() != batch_size * BOARD_FEATURE_COUNT {
+            return Err(tch::TchError::Kind(format!(
+                "Expected {batch_size} board feature sets, got {} values",
+                features.len()
+            )));
+        }
+
+        let input = Tensor::from_slice(features).view([batch_size as i64, 3, 8, 8]);
+        let (policy_tensor, value_tensor) = self.forward(&input)?;
+        let expected_policy_values = batch_size * 64;
+        if policy_tensor.numel() != expected_policy_values || value_tensor.numel() != batch_size {
+            return Err(tch::TchError::Kind(format!(
+                "Unexpected model output sizes: policy={}, value={}, batch={batch_size}",
+                policy_tensor.numel(),
+                value_tensor.numel()
+            )));
+        }
+
+        let mut policies = vec![0.0f32; expected_policy_values];
+        let mut values = vec![0.0f32; batch_size];
+        policy_tensor
+            .contiguous()
+            .view([-1])
+            .copy_data(&mut policies, expected_policy_values);
+        value_tensor
+            .contiguous()
+            .view([-1])
+            .copy_data(&mut values, batch_size);
+        Ok((policies, values))
+    }
 }
 
 impl PolicyValueModel for NnModel {
@@ -26,19 +62,9 @@ impl PolicyValueModel for NnModel {
 /// - policy_logits: Vec<f32> of length 64 (logits for each square)
 /// - value: f32 in range [-1, 1] (position evaluation)
 pub fn evaluate_with_nn<M: PolicyValueModel>(board: &Board, model: &M) -> Result<(Vec<f32>, f32)> {
-    // Get tensor [3, 8, 8]
-    let tensor = board.to_tensor();
-
-    // Add batch dimension [1, 3, 8, 8]. The model owns device placement so a
-    // batching wrapper can combine CPU inputs before transferring them.
-    let input = tensor.unsqueeze(0);
-
-    // Forward pass
-    let (policy_tensor, value_tensor) = model.forward(&input)?;
-
-    // Extract to Vec
-    let policy: Vec<f32> = tensor_to_vec_f32(&policy_tensor.squeeze())?;
-    let value: f32 = tensor_to_f32(&value_tensor.squeeze())?;
+    let features = board.to_features();
+    let (policy, values) = model.evaluate_batch(&features, 1)?;
+    let value = values[0];
 
     if policy.len() != 64 {
         return Err(MctsError::EvaluationFailed(format!(
@@ -113,41 +139,6 @@ pub fn softmax_legal_moves(logits: &[f32], legal_moves: &[usize]) -> Vec<f32> {
         .iter()
         .map(|&m| (logits[m] - max).exp() / exp_sum)
         .collect()
-}
-
-/// Helper: Convert tensor to Vec<f32>
-pub(crate) fn tensor_to_vec_f32(tensor: &Tensor) -> Result<Vec<f32>> {
-    let size = tensor.size();
-    if size.len() != 1 {
-        return Err(MctsError::EvaluationFailed(format!(
-            "Expected 1D tensor, got shape {:?}",
-            size
-        )));
-    }
-
-    let len = size[0] as usize;
-    let mut vec = vec![0.0f32; len];
-
-    // Copy data from tensor to vec
-    tensor.copy_data(&mut vec, len);
-
-    Ok(vec)
-}
-
-/// Helper: Convert tensor to f32
-pub(crate) fn tensor_to_f32(tensor: &Tensor) -> Result<f32> {
-    let size = tensor.size();
-    if !size.is_empty() && size.iter().product::<i64>() != 1 {
-        return Err(MctsError::EvaluationFailed(format!(
-            "Expected scalar tensor, got shape {:?}",
-            size
-        )));
-    }
-
-    let mut value = [0.0f32; 1];
-    tensor.copy_data(&mut value, 1);
-
-    Ok(value[0])
 }
 
 #[cfg(test)]

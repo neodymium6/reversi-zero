@@ -3,9 +3,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
+use reversi_core::BOARD_FEATURE_COUNT;
 use tch::{Device, Tensor};
 
 use crate::evaluation::PolicyValueModel;
+
+type EvaluationOutput = (Vec<f32>, Vec<f32>);
+type EvaluationResult = Result<EvaluationOutput, tch::TchError>;
 
 /// A batched wrapper around a policy/value model.
 ///
@@ -16,11 +20,9 @@ pub struct BatchingModel<M: PolicyValueModel + Send + Sync + 'static> {
 }
 
 struct BatchWork {
-    // Always normalized to [B, C, H, W]. A work item may contain a complete
-    // MCTS expansion batch rather than one leaf.
-    input: Tensor,
-    unbatched: bool,
-    resp_tx: Sender<Result<(Tensor, Tensor), tch::TchError>>,
+    features: Vec<f32>,
+    sample_count: usize,
+    resp_tx: Sender<EvaluationResult>,
 }
 
 struct BatchingInner<M: PolicyValueModel + Send + Sync + 'static> {
@@ -64,33 +66,69 @@ impl<M: PolicyValueModel + Send + Sync + 'static> Clone for BatchingModel<M> {
 
 impl<M: PolicyValueModel + Send + Sync + 'static> PolicyValueModel for BatchingModel<M> {
     fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
-        let (input, unbatched) = match x.dim() {
-            3 => (x.unsqueeze(0), true),
-            4 => (x.shallow_clone(), false),
+        let (input, sample_count, unbatched) = match x.dim() {
+            3 => (x.unsqueeze(0), 1, true),
+            4 => (x.shallow_clone(), x.size()[0] as usize, false),
             dimensions => {
                 return Err(tch::TchError::Kind(format!(
                     "Expected a 3D or 4D input tensor, got {dimensions} dimensions"
                 )));
             }
         };
-        let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
-
-        self.inner
-            .sender
-            .send(BatchWork {
-                input,
-                unbatched,
-                resp_tx,
-            })
-            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
-
-        resp_rx
-            .recv()
-            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
+        let expected_values = sample_count * BOARD_FEATURE_COUNT;
+        let mut features = vec![0.0f32; expected_values];
+        input
+            .to_device(Device::Cpu)
+            .contiguous()
+            .view([-1])
+            .copy_data(&mut features, expected_values);
+        let (policies, values) = self.enqueue(features, sample_count)?;
+        let mut policy = Tensor::from_slice(&policies).view([sample_count as i64, 64]);
+        let mut value = Tensor::from_slice(&values).view([sample_count as i64, 1]);
+        if unbatched {
+            policy = policy.squeeze_dim(0);
+            value = value.squeeze_dim(0);
+        }
+        Ok((policy, value))
     }
 
     fn device(&self) -> Device {
         self.inner.device
+    }
+
+    fn evaluate_batch(
+        &self,
+        features: &[f32],
+        batch_size: usize,
+    ) -> tch::Result<(Vec<f32>, Vec<f32>)> {
+        if batch_size == 0 || features.len() != batch_size * BOARD_FEATURE_COUNT {
+            return Err(tch::TchError::Kind(format!(
+                "Expected {batch_size} board feature sets, got {} values",
+                features.len()
+            )));
+        }
+        self.enqueue(features.to_vec(), batch_size)
+    }
+}
+
+impl<M: PolicyValueModel + Send + Sync + 'static> BatchingModel<M> {
+    fn enqueue(
+        &self,
+        features: Vec<f32>,
+        sample_count: usize,
+    ) -> tch::Result<(Vec<f32>, Vec<f32>)> {
+        let (resp_tx, resp_rx) = bounded::<EvaluationResult>(1);
+        self.inner
+            .sender
+            .send(BatchWork {
+                features,
+                sample_count,
+                resp_tx,
+            })
+            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
+        resp_rx
+            .recv()
+            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
     }
 }
 
@@ -111,7 +149,7 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
                 Err(_) => break,
             },
         };
-        let mut sample_count = first.input.size()[0] as usize;
+        let mut sample_count = first.sample_count;
         let mut works = Vec::with_capacity(batch_size.min(64));
         works.push(first);
 
@@ -125,7 +163,7 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
             let recv_result = rx.recv_timeout(remaining);
             match recv_result {
                 Ok(work) => {
-                    let work_samples = work.input.size()[0] as usize;
+                    let work_samples = work.sample_count;
                     if sample_count + work_samples > batch_size {
                         pending = Some(work);
                         break;
@@ -138,30 +176,23 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
             }
         }
 
-        // Concatenate complete request batches on CPU, then let the underlying
-        // model perform one device transfer for the full inference batch.
-        let batch_inputs: Vec<_> = works
-            .iter()
-            .map(|work| work.input.shallow_clone())
-            .collect();
-        let combined = Tensor::cat(&batch_inputs, 0);
-        let forward_result = model.forward(&combined);
+        let mut combined = Vec::with_capacity(sample_count * BOARD_FEATURE_COUNT);
+        for work in &works {
+            combined.extend_from_slice(&work.features);
+        }
+        let forward_result = model.evaluate_batch(&combined, sample_count);
 
         match forward_result {
             Ok((policy_batch, value_batch)) => {
-                // Outputs have already crossed to CPU as complete batches.
-                // Split them per request without further device synchronization.
-                let mut offset = 0i64;
+                let mut offset = 0usize;
                 for work in works {
-                    let request_size = work.input.size()[0];
-                    let mut policy = policy_batch.narrow(0, offset, request_size);
-                    let mut value = value_batch.narrow(0, offset, request_size);
-                    if work.unbatched {
-                        policy = policy.squeeze_dim(0);
-                        value = value.squeeze_dim(0);
-                    }
-                    let _ = work.resp_tx.send(Ok((policy, value)));
-                    offset += request_size;
+                    let request_end = offset + work.sample_count;
+                    let policy_start = offset * 64;
+                    let policy_end = request_end * 64;
+                    let policies = policy_batch[policy_start..policy_end].to_vec();
+                    let values = value_batch[offset..request_end].to_vec();
+                    let _ = work.resp_tx.send(Ok((policies, values)));
+                    offset = request_end;
                 }
             }
             Err(err) => {

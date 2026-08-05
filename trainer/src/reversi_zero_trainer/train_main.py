@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -47,6 +48,7 @@ class RunConfig:
     selfplay_num_simulations: int = 100
     selfplay_expansion_batch_size: int = 4
     selfplay_c_puct: float = 3.0
+    inference_dtype: Literal["auto", "float32", "float16"] = "auto"
 
     train_batch_size: int = 256
     train_num_workers: int | None = None
@@ -107,6 +109,11 @@ class RunConfig:
             return self.train_num_workers
         return 0 if device == "cpu" else 4
 
+    def resolved_inference_dtype(self, device: str) -> Literal["float32", "float16"]:
+        if self.inference_dtype == "auto":
+            return "float16" if device == "cuda" else "float32"
+        return self.inference_dtype
+
     def validate(self) -> None:
         positive_ints = {
             "num_iterations": self.num_iterations,
@@ -137,6 +144,9 @@ class RunConfig:
             raise ValueError(f"These settings must be > 0: {', '.join(invalid)}")
         if self.train_num_workers is not None and self.train_num_workers < 0:
             raise ValueError("train_num_workers must be >= 0")
+        device = self.resolved_device()
+        if self.resolved_inference_dtype(device) == "float16" and device != "cuda":
+            raise ValueError("float16 inference requires CUDA")
 
 
 @dataclass(frozen=True)
@@ -163,6 +173,7 @@ def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
         device
     )
     payload["train_num_workers"] = config.resolved_train_num_workers(device)
+    payload["inference_dtype"] = config.resolved_inference_dtype(device)
     return payload
 
 
@@ -182,11 +193,22 @@ def _validate_resume_model_config(config: RunConfig, run_dir: Path) -> None:
         raise RuntimeError(f"Cannot resume without {config_path}")
 
     stored = json.loads(config_path.read_text(encoding="utf-8"))
-    for key in ("model_type", "model_channels", "model_num_blocks"):
-        if stored.get(key) != getattr(config, key):
+    for key in (
+        "model_type",
+        "model_channels",
+        "model_num_blocks",
+        "inference_dtype",
+    ):
+        stored_value = stored.get(key, "float32" if key == "inference_dtype" else None)
+        requested_value = (
+            config.resolved_inference_dtype(config.resolved_device())
+            if key == "inference_dtype"
+            else getattr(config, key)
+        )
+        if stored_value != requested_value:
             raise RuntimeError(
                 f"Resume configuration mismatch for {key}: "
-                f"stored={stored.get(key)!r}, requested={getattr(config, key)!r}"
+                f"stored={stored_value!r}, requested={requested_value!r}"
             )
 
 
@@ -260,16 +282,36 @@ def prepare_run(config: RunConfig) -> RunState:
     return RunState(run_dir, start_iteration, checkpoint_path)
 
 
+class _Float16InferenceWrapper(torch.nn.Module):
+    """Keep the Rust boundary FP32 while running the network in FP16."""
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        policy, value = self.model(inputs.to(dtype=torch.float16))
+        return policy.float(), value.float()
+
+
 def export_model_to_torchscript(
     model: torch.nn.Module,
     output_path: Path | str,
     device: str = "cuda",
+    inference_dtype: Literal["float32", "float16"] = "float32",
 ) -> None:
     """Atomically export a PyTorch model to TorchScript."""
     model.eval()
     model.to(device)
+    export_model = model
+    if inference_dtype == "float16":
+        if device != "cuda":
+            raise ValueError("float16 inference requires CUDA")
+        export_model = _Float16InferenceWrapper(
+            copy.deepcopy(model).to(device=device, dtype=torch.float16)
+        ).eval()
     dummy_input = torch.randn(1, 3, 8, 8, device=device)
-    traced_model = torch.jit.trace(model, dummy_input)
+    traced_model = torch.jit.trace(export_model, dummy_input)
     if not isinstance(traced_model, torch.jit.ScriptModule):
         raise ValueError(
             "Model must be a torch.jit.ScriptModule for TorchScript export."
@@ -313,6 +355,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--simulations", type=int, default=100)
     parser.add_argument("--expansion-batch-size", type=int, default=4)
     parser.add_argument("--c-puct", type=float, default=3.0)
+    parser.add_argument(
+        "--inference-dtype",
+        choices=["auto", "float32", "float16"],
+        default="auto",
+        help="TorchScript self-play precision (default: float16 on CUDA, float32 on CPU)",
+    )
 
     parser.add_argument("--train-batch-size", type=int, default=256)
     parser.add_argument(
@@ -354,6 +402,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         selfplay_num_simulations=args.simulations,
         selfplay_expansion_batch_size=args.expansion_batch_size,
         selfplay_c_puct=args.c_puct,
+        inference_dtype=args.inference_dtype,
         train_batch_size=args.train_batch_size,
         train_num_workers=args.num_workers,
         train_num_epochs=args.epochs,
@@ -376,6 +425,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Run the configured AlphaZero training loop."""
     config = parse_args(argv)
     device = config.resolved_device()
+    inference_dtype = config.resolved_inference_dtype(device)
     torch_threads = config.resolved_torch_threads(device)
     configure_training_threads(device, torch_threads)
     selfplay_batch_size = config.resolved_selfplay_batch_size(device)
@@ -419,7 +469,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     trainer = AlphaZeroTrainer(model=model, config=train_config)
     if state.checkpoint_path is None:
-        export_model_to_torchscript(model, models_dir / "model_iter_0.pt", device)
+        export_model_to_torchscript(
+            model,
+            models_dir / "model_iter_0.pt",
+            device,
+            inference_dtype,
+        )
     else:
         trainer.load_checkpoint(state.checkpoint_path)
         trainer.config = train_config
@@ -447,6 +502,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "expansion_batch_size": config.selfplay_expansion_batch_size,
                 "torch_threads": torch_threads,
                 "num_simulations": config.selfplay_num_simulations,
+                "inference_dtype": inference_dtype,
             },
             train_config=train_config,
             model_config={
@@ -522,11 +578,21 @@ def main(argv: Sequence[str] | None = None) -> None:
             logger.log_artifact("checkpoint", str(checkpoint_path))
 
             next_model_path = models_dir / f"model_iter_{iteration + 1}.pt"
-            export_model_to_torchscript(model, next_model_path, device=device)
+            export_model_to_torchscript(
+                model,
+                next_model_path,
+                device=device,
+                inference_dtype=inference_dtype,
+            )
             logger.log_artifact("model", str(next_model_path))
 
         final_model_path = models_dir / "model_final.pt"
-        export_model_to_torchscript(model, final_model_path, device=device)
+        export_model_to_torchscript(
+            model,
+            final_model_path,
+            device=device,
+            inference_dtype=inference_dtype,
+        )
         logger.log_artifact("final model", str(final_model_path))
 
 
