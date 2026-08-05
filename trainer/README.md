@@ -35,7 +35,7 @@ Passing an existing directory without `--resume` is an error.
   --games-per-iteration 4 \
   --simulations 8 \
   --epochs 1 \
-  --no-arena
+  --no-reference-eval
 ```
 
 See `../scripts/train --help` for all configuration options.
@@ -99,6 +99,14 @@ exceed 50%. A rejected candidate's model and checkpoint are retained under
 `models/ts/candidates/` and `checkpoints/`, while the incumbent model and
 optimizer are restored for the next iteration. Use `--no-promotion` to disable
 gating or `--no-promotion-require-confidence` to use only the score threshold.
+
+After promotion, the selected incumbent is automatically evaluated against
+Random, Alpha-Beta, and BitMatrix with one fixed opening suite shared across
+opponents and iterations. The
+reference search reuses the self-play simulation and expansion settings; the
+opening length and seed reuse the promotion settings. This leaves only two
+dedicated controls: `--no-reference-eval` disables the suite, and
+`--reference-games N` changes the even total number of games per opponent.
 
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before

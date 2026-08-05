@@ -24,6 +24,7 @@ from reversi_zero_trainer.logging import (
     create_logger,
     log_hyperparameters,
     log_promotion_metrics,
+    log_reference_metrics,
     log_selfplay_stats,
     log_training_metrics,
 )
@@ -67,11 +68,8 @@ class RunConfig:
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
 
-    arena_enabled: bool = True
-    arena_games: int = 10
-    arena_mcts_sims: int = 400
-    arena_alphabeta_temperature: float = 0.5
-    arena_random_temperature: float = 0.0
+    reference_eval_enabled: bool = True
+    reference_games: int = 40
 
     promotion_enabled: bool = True
     promotion_num_openings: int = 40
@@ -150,8 +148,7 @@ class RunConfig:
             "train_batch_size": self.train_batch_size,
             "train_num_epochs": self.train_num_epochs,
             "train_replay_window": self.train_replay_window,
-            "arena_games": self.arena_games,
-            "arena_mcts_sims": self.arena_mcts_sims,
+            "reference_games": self.reference_games,
             "promotion_num_openings": self.promotion_num_openings,
             "promotion_mcts_sims": self.resolved_promotion_mcts_sims(),
             "promotion_expansion_batch_size": (
@@ -179,6 +176,8 @@ class RunConfig:
             raise ValueError("train_num_workers must be >= 0")
         if self.train_symmetry_augmentation not in (1, 2, 4, 8):
             raise ValueError("train_symmetry_augmentation must be one of 1, 2, 4, or 8")
+        if self.reference_games % 2 != 0:
+            raise ValueError("reference_games must be even for paired color swaps")
         if self.promotion_opening_plies < 0:
             raise ValueError("promotion_opening_plies must be >= 0")
         if self.promotion_c_puct <= 0:
@@ -279,6 +278,50 @@ def evaluate_promotion_candidate(
     )
     write_evaluation_report(report, report_path)
     return report
+
+
+def evaluate_reference_opponents(
+    model_path: Path,
+    evaluations_dir: Path,
+    config: RunConfig,
+    iteration: int,
+    device: str,
+    torch_threads: int | None,
+) -> dict[str, tuple[dict[str, Any], Path]]:
+    """Evaluate the selected incumbent against all fixed reference opponents."""
+    results: dict[str, tuple[dict[str, Any], Path]] = {}
+    opening_source: Path | None = None
+    for opponent in ("random", "alphabeta", "bitmatrix"):
+        report_path = evaluations_dir / f"reference_{opponent}_iter_{iteration}.json"
+        args = argparse.Namespace(
+            challenger=model_path,
+            reference_model=None,
+            reference_alphabeta=opponent == "alphabeta",
+            reference_bitmatrix=opponent == "bitmatrix",
+            reference_random=opponent == "random",
+            output=report_path,
+            overwrite=False,
+            openings_from=opening_source,
+            num_openings=config.reference_games // 2,
+            opening_plies=config.promotion_opening_plies,
+            seed=config.promotion_seed,
+            device=device,
+            torch_threads=torch_threads or 1,
+            simulations=config.selfplay_num_simulations,
+            c_puct=config.promotion_c_puct,
+            challenger_expansion_batch_size=config.selfplay_expansion_batch_size,
+            reference_expansion_batch_size=1,
+            alphabeta_depth=3,
+            bitmatrix_depth=3,
+            promotion_threshold=0.5,
+            show_progress=False,
+        )
+        report = run_model_evaluation(args)
+        write_evaluation_report(report, report_path)
+        results[opponent] = (report, report_path)
+        if opening_source is None:
+            opening_source = report_path
+    return results
 
 
 def _copy_file_atomically(source: Path, destination: Path) -> None:
@@ -587,11 +630,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-loss-weight", type=float, default=1.0)
     parser.add_argument("--value-loss-weight", type=float, default=1.0)
 
-    parser.add_argument("--arena", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--arena-games", type=int, default=10)
-    parser.add_argument("--arena-mcts-sims", type=int, default=400)
-    parser.add_argument("--arena-alphabeta-temperature", type=float, default=0.5)
-    parser.add_argument("--arena-random-temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--reference-eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Evaluate each selected incumbent against all fixed references",
+    )
+    parser.add_argument(
+        "--reference-games",
+        type=int,
+        default=40,
+        help="Total games per reference, split evenly across colors",
+    )
 
     parser.add_argument(
         "--promotion",
@@ -654,11 +704,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         train_weight_decay=args.weight_decay,
         policy_loss_weight=args.policy_loss_weight,
         value_loss_weight=args.value_loss_weight,
-        arena_enabled=args.arena,
-        arena_games=args.arena_games,
-        arena_mcts_sims=args.arena_mcts_sims,
-        arena_alphabeta_temperature=args.arena_alphabeta_temperature,
-        arena_random_temperature=args.arena_random_temperature,
+        reference_eval_enabled=args.reference_eval,
+        reference_games=args.reference_games,
         promotion_enabled=args.promotion,
         promotion_num_openings=args.promotion_openings,
         promotion_opening_plies=args.promotion_opening_plies,
@@ -694,6 +741,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     models_dir.mkdir(parents=True, exist_ok=True)
     if config.promotion_enabled:
         candidate_models_dir.mkdir(parents=True, exist_ok=True)
+    if config.promotion_enabled or config.reference_eval_enabled:
         evaluations_dir.mkdir(parents=True, exist_ok=True)
 
     torch.manual_seed(config.seed)
@@ -711,14 +759,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         value_loss_weight=config.value_loss_weight,
         device=device,
         checkpoint_dir=checkpoints_dir,
-        arena_enabled=config.arena_enabled,
-        arena_vs_alphabeta=True,
-        arena_vs_random=True,
-        arena_games=config.arena_games,
-        arena_mcts_sims=config.arena_mcts_sims,
-        arena_alphabeta_temperature=config.arena_alphabeta_temperature,
-        arena_random_temperature=config.arena_random_temperature,
-        arena_device=None,
     )
 
     if config.model_type == "resnet":
@@ -775,14 +815,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "channels": config.model_channels,
                 "num_blocks": config.model_num_blocks,
             },
-            arena_config={
-                "enabled": train_config.arena_enabled,
-                "vs_alphabeta": train_config.arena_vs_alphabeta,
-                "vs_random": train_config.arena_vs_random,
-                "games": train_config.arena_games,
-                "mcts_sims": train_config.arena_mcts_sims,
-                "alphabeta_temperature": train_config.arena_alphabeta_temperature,
-                "random_temperature": train_config.arena_random_temperature,
+            reference_config={
+                "enabled": config.reference_eval_enabled,
+                "games": config.reference_games,
             },
             promotion_config={
                 "enabled": config.promotion_enabled,
@@ -809,6 +844,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             math.ceil(config.selfplay_games_per_iter / config.report_interval())
             + config.train_num_epochs
             + int(config.promotion_enabled)
+            + 3 * int(config.reference_eval_enabled)
         )
         global_step = state.start_iteration * steps_per_iteration
 
@@ -923,6 +959,32 @@ def main(argv: Sequence[str] | None = None) -> None:
                     device=device,
                     inference_dtype=inference_dtype,
                 )
+
+            if config.reference_eval_enabled:
+                reference_results = evaluate_reference_opponents(
+                    model_path=next_model_path,
+                    evaluations_dir=evaluations_dir,
+                    config=config,
+                    iteration=iteration,
+                    device=device,
+                    torch_threads=torch_threads,
+                )
+                for opponent, (
+                    reference_report,
+                    reference_path,
+                ) in reference_results.items():
+                    log_reference_metrics(
+                        logger,
+                        opponent=opponent,
+                        report=reference_report,
+                        iteration=iteration,
+                        step=global_step,
+                    )
+                    global_step += 1
+                    logger.log_artifact(
+                        f"{opponent} reference evaluation",
+                        str(reference_path),
+                    )
 
             logger.log_artifact("checkpoint", str(checkpoint_path))
             logger.log_artifact("model", str(next_model_path))

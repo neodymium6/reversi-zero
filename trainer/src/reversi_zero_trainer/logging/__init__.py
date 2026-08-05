@@ -27,6 +27,7 @@ from .config import BaseLoggerConfig, ConsoleConfig, LoggerKind, LoggingConfig
 from .helpers import (
     log_hyperparameters,
     log_promotion_metrics,
+    log_reference_metrics,
     log_selfplay_stats,
     log_training_metrics,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "LoggerKind",
     "log_hyperparameters",
     "log_promotion_metrics",
+    "log_reference_metrics",
     "log_selfplay_stats",
     "log_training_metrics",
 ]

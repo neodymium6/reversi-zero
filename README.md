@@ -90,8 +90,9 @@ This creates a new timestamped directory under `trainer/runs/` and runs the
 full AlphaZero training loop (10 iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 128)
 2. **Neural network training** - 10 epochs per iteration
-3. **Arena evaluation** - Test vs Alpha-Beta and Random players
-4. **Candidate promotion** - Replace the incumbent only after a paired direct match
+3. **Candidate promotion** - Replace the incumbent only after a paired direct match
+4. **Reference evaluation** - Test the selected incumbent against Random,
+   Alpha-Beta, and BitMatrix using one shared opening suite
 
 Existing run directories are never reused implicitly. To select a stable name:
 
@@ -106,8 +107,8 @@ continue if the next iteration contains ambiguous partial self-play data:
 ./scripts/train --run-dir runs/experiment-001 --resume
 ```
 
-Use `./scripts/train --help` to configure game counts, MCTS, training, Arena,
-device, and model architecture without editing source code.
+Use `./scripts/train --help` to configure game counts, MCTS, training,
+reference evaluation, device, and model architecture without editing source code.
 
 ### Training Output
 
@@ -125,7 +126,10 @@ runs/<timestamp>/
 │   ├── checkpoint_iter_1.pt
 │   └── candidate_iter_1.pt  # Retained only when rejected
 ├── evaluations/
-│   └── promotion_iter_1.json
+│   ├── promotion_iter_1.json
+│   ├── reference_random_iter_1.json
+│   ├── reference_alphabeta_iter_1.json
+│   └── reference_bitmatrix_iter_1.json
 └── models/ts/
     ├── model_iter_0.pt     # TorchScript model for self-play
     ├── model_iter_1.pt
@@ -185,17 +189,17 @@ To isolate MCTS expansion batching with the same model and search budget, pass
 ### Training System
 
 - **Policy + Value loss** - Cross-entropy for policy, MSE for value
-- **Arena evaluation** - Automated testing during training
+- **Paired reference evaluation** - Automated absolute-strength tracking
 - **Rich logging** - Real-time metrics with console output
 - **Checkpointing** - Save/load training state
 
-### Arena Evaluation
+### Reference Evaluation
 
-Tests trained models against baseline opponents:
+After promotion, tests the selected incumbent against all baseline opponents
+using one fixed opening suite across opponents and iterations, with colors swapped:
 - **Alpha-Beta** - Traditional minimax search
 - **BitMatrix Alpha-Beta** - Native Rust search with a weighted six-mask evaluator
 - **Random** - Random move selection
-- **Temperature control** - Adds diversity to deterministic opponents
 
 ## Configuration
 
@@ -230,15 +234,12 @@ learning_rate = 0.001                      # Adam learning rate
 weight_decay = 1e-4                        # L2 regularization
 ```
 
-### Arena Evaluation
+### Reference Evaluation
 
 ```python
-# Arena configuration
-arena_enabled = True                       # Enable arena evaluation
-arena_games = 10                           # Games per opponent
-arena_mcts_sims = 400                      # MCTS simulations
-arena_alphabeta_temperature = 0.5          # Temperature vs Alpha-Beta
-arena_random_temperature = 0.0             # Temperature vs Random
+# Only two dedicated reference-evaluation controls
+reference_eval_enabled = True              # Evaluate every selected incumbent
+reference_games = 40                       # Total paired games per opponent
 
 # Candidate promotion
 promotion_enabled = True                   # Gate each new self-play model
@@ -300,7 +301,7 @@ Rust Self-Play
     ↓ (NumPy arrays)
 Python Training
     ↓ (Updated model)
-Arena Evaluation
+Paired Reference Evaluation
     ↓ (Metrics)
 Next Iteration
 ```

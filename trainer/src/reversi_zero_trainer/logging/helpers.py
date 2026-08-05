@@ -89,6 +89,33 @@ def log_promotion_metrics(
         )
 
 
+def log_reference_metrics(
+    logger: BaseLogger,
+    opponent: str,
+    report: dict[str, Any],
+    iteration: int,
+    step: int,
+) -> None:
+    """Log paired incumbent-vs-reference evaluation results."""
+    summary = report["summary"]
+    interval = summary["score_interval_95"]
+    metrics = {
+        "score": summary["score"],
+        "score_interval_low": interval[0],
+        "score_interval_high": interval[1],
+        "wins": summary["wins"],
+        "draws": summary["draws"],
+        "losses": summary["losses"],
+    }
+    for name, value in metrics.items():
+        logger.log_metric(
+            f"iter_{iteration}/reference/{opponent}/{name}",
+            float(value),
+            step=step,
+            color="yellow",
+        )
+
+
 def log_hyperparameters(
     logger: BaseLogger,
     num_iterations: int,
@@ -97,7 +124,7 @@ def log_hyperparameters(
     selfplay_config: dict[str, Any],
     train_config: TrainingConfig,
     model_config: dict[str, Any],
-    arena_config: dict[str, Any],
+    reference_config: dict[str, Any],
     promotion_config: dict[str, Any],
     paths: dict[str, Path],
     device: str,
@@ -112,7 +139,7 @@ def log_hyperparameters(
         selfplay_config: Self-play configuration
         train_config: Training configuration
         model_config: Model configuration
-        arena_config: Arena evaluation configuration
+        reference_config: Fixed reference evaluation configuration
         promotion_config: Candidate promotion configuration
         paths: Dictionary of paths (data_base_dir, models_dir, checkpoint_dir)
         device: Device being used
@@ -150,16 +177,11 @@ def log_hyperparameters(
     logger.log_param("model_channels", model_config["channels"])
     logger.log_param("model_num_blocks", model_config["num_blocks"])
 
-    # Arena evaluation parameters
-    logger.log_param("arena_enabled", arena_config["enabled"])
-    logger.log_param("arena_vs_alphabeta", arena_config["vs_alphabeta"])
-    logger.log_param("arena_vs_random", arena_config["vs_random"])
-    logger.log_param("arena_games", arena_config["games"])
-    logger.log_param("arena_mcts_sims", arena_config["mcts_sims"])
-    logger.log_param(
-        "arena_alphabeta_temperature", arena_config["alphabeta_temperature"]
-    )
-    logger.log_param("arena_random_temperature", arena_config["random_temperature"])
+    # Fixed reference evaluation parameters. Search and opening settings are
+    # inherited from self-play/promotion to keep the public configuration small.
+    logger.log_param("reference_eval_enabled", reference_config["enabled"])
+    logger.log_param("reference_games", reference_config["games"])
+    logger.log_param("reference_opponents", "random,alphabeta,bitmatrix")
 
     # Candidate promotion parameters
     logger.log_param("promotion_enabled", promotion_config["enabled"])

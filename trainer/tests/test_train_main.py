@@ -14,6 +14,7 @@ from reversi_zero_trainer.train_main import (
     capture_trainer_snapshot,
     default_run_dir,
     evaluate_promotion_candidate,
+    evaluate_reference_opponents,
     finalize_candidate,
     parse_args,
     prepare_run,
@@ -45,6 +46,8 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["train_num_workers"] == 0
     assert stored["train_symmetry_augmentation"] == 8
     assert stored["train_replay_window"] == 5
+    assert stored["reference_eval_enabled"] is True
+    assert stored["reference_games"] == 40
     assert stored["promotion_enabled"] is True
     assert stored["promotion_num_openings"] == 40
     assert stored["promotion_mcts_sims"] == 100
@@ -128,7 +131,9 @@ def test_parse_args_maps_training_options():
             "resnet",
             "--inference-dtype",
             "float16",
-            "--no-arena",
+            "--no-reference-eval",
+            "--reference-games",
+            "20",
         ]
     )
 
@@ -147,7 +152,8 @@ def test_parse_args_maps_training_options():
     assert config.promotion_require_confidence
     assert config.model_type == "resnet"
     assert config.inference_dtype == "float16"
-    assert not config.arena_enabled
+    assert not config.reference_eval_enabled
+    assert config.reference_games == 20
 
 
 def test_run_config_rejects_invalid_symmetry_augmentation():
@@ -189,6 +195,7 @@ def test_replay_data_paths_rejects_missing_iteration(tmp_path):
         ({"promotion_c_puct": 0.0}, "must be > 0"),
         ({"promotion_threshold": 1.1}, "between 0 and 1"),
         ({"train_replay_window": 0}, "must be > 0"),
+        ({"reference_games": 3}, "must be even"),
     ],
 )
 def test_run_config_rejects_invalid_promotion_settings(kwargs, message):
@@ -242,6 +249,68 @@ def test_evaluate_promotion_candidate_persists_decision(tmp_path, monkeypatch):
     assert output.is_file()
     stored = json.loads(output.read_text(encoding="utf-8"))
     assert stored["summary"]["promotion_accepted"] is True
+
+
+def test_reference_opponents_share_openings_and_training_search_budget(
+    tmp_path, monkeypatch
+):
+    model = tmp_path / "model.pt"
+    model.touch()
+    evaluations_dir = tmp_path / "evaluations"
+    evaluations_dir.mkdir()
+    calls = []
+
+    def fake_evaluation(args):
+        calls.append(args)
+        opponent = (
+            "alphabeta"
+            if args.reference_alphabeta
+            else "bitmatrix"
+            if args.reference_bitmatrix
+            else "random"
+        )
+        return {
+            "reference": {"type": opponent},
+            "summary": {
+                "score": 0.5,
+                "score_interval_95": [0.4, 0.6],
+                "wins": 5,
+                "draws": 2,
+                "losses": 5,
+            },
+        }
+
+    monkeypatch.setattr(train_main, "run_model_evaluation", fake_evaluation)
+    results = evaluate_reference_opponents(
+        model_path=model,
+        evaluations_dir=evaluations_dir,
+        config=RunConfig(
+            reference_games=12,
+            selfplay_num_simulations=50,
+            selfplay_expansion_batch_size=2,
+            promotion_opening_plies=6,
+            promotion_seed=10,
+        ),
+        iteration=2,
+        device="cpu",
+        torch_threads=3,
+    )
+
+    assert list(results) == ["random", "alphabeta", "bitmatrix"]
+    assert [call.openings_from for call in calls] == [
+        None,
+        evaluations_dir / "reference_random_iter_2.json",
+        evaluations_dir / "reference_random_iter_2.json",
+    ]
+    for call in calls:
+        assert call.challenger == model
+        assert call.num_openings == 6
+        assert call.opening_plies == 6
+        assert call.seed == 10
+        assert call.simulations == 50
+        assert call.challenger_expansion_batch_size == 2
+        assert call.torch_threads == 3
+    assert all(path.is_file() for _, path in results.values())
 
 
 def test_finalize_candidate_promotes_candidate_files(tmp_path):
