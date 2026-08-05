@@ -38,9 +38,9 @@ reversi-zero/
 ### Prerequisites
 
 - **Rust** (stable) - [Install](https://rustup.rs/)
-- **Python** 3.10+
+- **Python** 3.10
 - **uv** - [Install](https://docs.astral.sh/uv/)
-- **PyTorch** 2.9.0 with libtorch
+- **PyTorch** 2.9.0 (installed by `uv`)
 - **CUDA** (optional, for GPU acceleration)
 
 ### Setup
@@ -52,12 +52,24 @@ cd reversi-zero
 
 # Initialize development environment
 make init
+```
 
-# Build Rust components
-cd agent && cargo build --release
+`make init` is the canonical setup command. It installs Python dependencies
+first, then builds the PyO3 extension against the PyTorch installation in
+`trainer/.venv`. This avoids recording an ephemeral `uv` build-environment
+path in Cargo's `torch-sys` artifacts.
 
-# Install Python dependencies
-cd ../trainer && uv sync
+Verify the active toolchain and Python/Rust bridge at any time:
+
+```bash
+make doctor
+```
+
+No `.envrc` is required. For a direct Cargo command that links to PyTorch, use
+the environment wrapper:
+
+```bash
+./scripts/with-torch-env cargo build --manifest-path agent/Cargo.toml --release
 ```
 
 ## Quick Start
@@ -65,8 +77,7 @@ cd ../trainer && uv sync
 ### Train a Model
 
 ```bash
-cd trainer
-uv run train
+./scripts/train
 ```
 
 This creates a new timestamped directory under `trainer/runs/` and runs the
@@ -78,17 +89,17 @@ full AlphaZero training loop (10 iterations by default):
 Existing run directories are never reused implicitly. To select a stable name:
 
 ```bash
-uv run train --run-dir runs/experiment-001
+./scripts/train --run-dir runs/experiment-001
 ```
 
 Resume starts after the latest complete checkpoint/model pair. It refuses to
 continue if the next iteration contains ambiguous partial self-play data:
 
 ```bash
-uv run train --run-dir runs/experiment-001 --resume
+./scripts/train --run-dir runs/experiment-001 --resume
 ```
 
-Use `uv run train --help` to configure game counts, MCTS, training, Arena,
+Use `./scripts/train --help` to configure game counts, MCTS, training, Arena,
 device, and model architecture without editing source code.
 
 ### Training Output
@@ -182,10 +193,10 @@ arena_random_temperature = 0.0             # Temperature vs Random
 make test
 
 # Rust tests only
-cd agent && cargo test
+make test-rust
 
 # Python tests only
-cd trainer && uv run pytest
+make test-python
 ```
 
 ### Code Formatting

@@ -53,7 +53,7 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: bash -c 'cd agent && cargo clippy --all-targets --all-features -- -D warnings'
+        entry: ./scripts/with-torch-env cargo clippy --manifest-path agent/Cargo.toml --all-targets --all-features -- -D warnings
         language: system
         files: ^agent/.*\.rs$
         pass_filenames: false
@@ -79,7 +79,7 @@ repos:
 
       - id: cargo-test
         name: cargo test
-        entry: bash -c 'cd agent && cargo test --all'
+        entry: ./scripts/with-torch-env cargo test --manifest-path agent/Cargo.toml --all
         language: system
         files: ^agent/.*\.rs$
         pass_filenames: false

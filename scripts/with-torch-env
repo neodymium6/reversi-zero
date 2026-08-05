@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+python_bin="${RZ_PYTHON:-${repo_root}/trainer/.venv/bin/python}"
+
+if [[ ! -x "${python_bin}" ]]; then
+    echo "Python environment not found at ${python_bin}. Run 'make init' first." >&2
+    exit 1
+fi
+
+torch_root="$("${python_bin}" -c 'from pathlib import Path; import torch; print(Path(torch.__file__).resolve().parent)')"
+torch_lib="${torch_root}/lib"
+
+if [[ ! -d "${torch_lib}" ]]; then
+    echo "PyTorch library directory not found at ${torch_lib}. Run 'make init' again." >&2
+    exit 1
+fi
+
+export LIBTORCH="${torch_root}"
+unset LIBTORCH_USE_PYTORCH
+export LD_LIBRARY_PATH="${torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+if [[ $# -eq 0 ]]; then
+    echo "Usage: scripts/with-torch-env COMMAND [ARG ...]" >&2
+    exit 2
+fi
+
+exec "$@"

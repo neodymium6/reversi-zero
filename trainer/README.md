@@ -1,9 +1,20 @@
 # Reversi Zero Trainer
 
+Initialize the repository from its root before running the trainer:
+
+```bash
+make init
+make doctor
+```
+
+The setup builds `reversi-zero-rs` against the PyTorch installation in this
+directory's `.venv`. Prefer `make init` over a standalone `uv sync` when
+rebuilding the environment or the Rust extension.
+
 Run training from this directory:
 
 ```bash
-uv run train
+../scripts/train
 ```
 
 Each invocation creates an isolated timestamped directory under `runs/`.
@@ -11,13 +22,13 @@ Passing an existing directory without `--resume` is an error.
 
 ```bash
 # Named run
-uv run train --run-dir runs/experiment-001
+../scripts/train --run-dir runs/experiment-001
 
 # Continue after its latest complete iteration
-uv run train --run-dir runs/experiment-001 --resume
+../scripts/train --run-dir runs/experiment-001 --resume
 
 # Small smoke run
-uv run train \
+../scripts/train \
   --run-dir runs/smoke \
   --num-iterations 1 \
   --games-per-iteration 4 \
@@ -26,7 +37,7 @@ uv run train \
   --no-arena
 ```
 
-See `uv run train --help` for all configuration options.
+See `../scripts/train --help` for all configuration options.
 
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before
