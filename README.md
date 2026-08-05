@@ -229,6 +229,7 @@ num_workers = 0                            # CPU default; 4 on CUDA
 num_epochs = 1                             # Epochs per iteration
 replay_window = 5                          # Recent self-play iterations to combine
 symmetry_augmentation = 8                  # Lazy D4 multiplier; eval stays unaugmented
+dtype = "auto"                             # BF16 on supported CUDA, otherwise FP32
 learning_rate = 0.001                      # Adam learning rate
 weight_decay = 1e-4                        # L2 regularization
 ```

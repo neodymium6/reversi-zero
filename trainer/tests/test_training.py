@@ -155,6 +155,11 @@ def test_trainer_initialization():
     assert trainer.total_epochs_trained == 0
 
 
+def test_bfloat16_training_config_rejects_cpu():
+    with pytest.raises(ValueError, match="bfloat16 training requires CUDA"):
+        TrainingConfig(device="cpu", dtype="bfloat16")
+
+
 def test_training_single_epoch(dummy_training_data):
     """Test that we can train for a single epoch."""
     model = DummyReversiNet()
@@ -305,6 +310,7 @@ def test_checkpoint_save_and_load(dummy_training_data):
 
         checkpoint = torch.load(checkpoint_path, weights_only=False)
         del checkpoint["config"].symmetry_augmentation
+        del checkpoint["config"].dtype
         legacy_checkpoint_path = Path(tmpdir) / "legacy_checkpoint.pt"
         torch.save(checkpoint, legacy_checkpoint_path)
 
@@ -312,6 +318,7 @@ def test_checkpoint_save_and_load(dummy_training_data):
         legacy_trainer.load_checkpoint(legacy_checkpoint_path)
 
         assert legacy_trainer.config.symmetry_augmentation == 1
+        assert legacy_trainer.config.dtype == "float32"
 
 
 def test_resnet_model():

@@ -76,6 +76,7 @@ class RunConfig:
     train_weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
+    train_dtype: Literal["auto", "float32", "bfloat16"] = "auto"
 
     reference_eval_enabled: bool = True
     reference_games: int = 40
@@ -140,6 +141,13 @@ class RunConfig:
             return "float16" if device == "cuda" else "float32"
         return self.inference_dtype
 
+    def resolved_train_dtype(self, device: str) -> Literal["float32", "bfloat16"]:
+        if self.train_dtype == "auto":
+            if device == "cuda" and torch.cuda.is_bf16_supported():
+                return "bfloat16"
+            return "float32"
+        return self.train_dtype
+
     def resolved_promotion_mcts_sims(self) -> int:
         return self.promotion_mcts_sims or self.selfplay_num_simulations
 
@@ -196,6 +204,14 @@ class RunConfig:
         device = self.resolved_device()
         if self.resolved_inference_dtype(device) == "float16" and device != "cuda":
             raise ValueError("float16 inference requires CUDA")
+        train_dtype = self.resolved_train_dtype(device)
+        if train_dtype == "bfloat16":
+            if device != "cuda":
+                raise ValueError("bfloat16 training requires CUDA")
+            if not torch.cuda.is_bf16_supported():
+                raise ValueError(
+                    "bfloat16 training is not supported by this CUDA device"
+                )
 
 
 @dataclass(frozen=True)
@@ -402,6 +418,7 @@ def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
     )
     payload["train_num_workers"] = config.resolved_train_num_workers(device)
     payload["inference_dtype"] = config.resolved_inference_dtype(device)
+    payload["train_dtype"] = config.resolved_train_dtype(device)
     payload["promotion_mcts_sims"] = config.resolved_promotion_mcts_sims()
     payload["promotion_expansion_batch_size"] = (
         config.resolved_promotion_expansion_batch_size()
@@ -425,18 +442,25 @@ def _validate_resume_model_config(config: RunConfig, run_dir: Path) -> None:
         raise RuntimeError(f"Cannot resume without {config_path}")
 
     stored = json.loads(config_path.read_text(encoding="utf-8"))
+    device = config.resolved_device()
     for key in (
         "model_type",
         "model_channels",
         "model_num_blocks",
         "inference_dtype",
+        "train_dtype",
     ):
-        stored_value = stored.get(key, "float32" if key == "inference_dtype" else None)
-        requested_value = (
-            config.resolved_inference_dtype(config.resolved_device())
-            if key == "inference_dtype"
-            else getattr(config, key)
+        stored_value = stored.get(
+            key,
+            "float32" if key in {"inference_dtype", "train_dtype"} else None,
         )
+        requested_value: object
+        if key == "inference_dtype":
+            requested_value = config.resolved_inference_dtype(device)
+        elif key == "train_dtype":
+            requested_value = config.resolved_train_dtype(device)
+        else:
+            requested_value = getattr(config, key)
         if stored_value != requested_value:
             raise RuntimeError(
                 f"Resume configuration mismatch for {key}: "
@@ -595,6 +619,7 @@ def run_config_from_hydra(config: DictConfig) -> RunConfig:
         train_weight_decay=typed.training.weight_decay,
         policy_loss_weight=typed.training.policy_loss_weight,
         value_loss_weight=typed.training.value_loss_weight,
+        train_dtype=typed.training.dtype.value,
         reference_eval_enabled=typed.reference.enabled,
         reference_games=typed.reference.games,
         promotion_enabled=typed.promotion.enabled,
@@ -626,6 +651,7 @@ def run_training(config: RunConfig) -> None:
     """Run the configured AlphaZero training loop."""
     device = config.resolved_device()
     inference_dtype = config.resolved_inference_dtype(device)
+    train_dtype = config.resolved_train_dtype(device)
     torch_threads = config.resolved_torch_threads(device)
     configure_training_threads(device, torch_threads)
     selfplay_batch_size = config.resolved_selfplay_batch_size(device)
@@ -657,6 +683,7 @@ def run_training(config: RunConfig) -> None:
         weight_decay=config.train_weight_decay,
         policy_loss_weight=config.policy_loss_weight,
         value_loss_weight=config.value_loss_weight,
+        dtype=train_dtype,
         device=device,
         checkpoint_dir=checkpoints_dir,
     )

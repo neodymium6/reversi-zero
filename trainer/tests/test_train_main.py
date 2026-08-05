@@ -56,6 +56,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["promotion_expansion_batch_size"] == 4
     assert stored["promotion_require_confidence"] is False
     assert stored["inference_dtype"] == "float32"
+    assert stored["train_dtype"] == "float32"
 
 
 def test_prepare_run_refuses_existing_directory_without_resume(tmp_path):
@@ -119,6 +120,7 @@ def test_hydra_config_maps_training_options():
             "promotion.require_confidence=true",
             "model=resnet",
             "hardware.inference_dtype=float16",
+            "training.dtype=bfloat16",
             "reference.enabled=false",
             "reference.games=20",
         ]
@@ -139,12 +141,30 @@ def test_hydra_config_maps_training_options():
     assert config.promotion_require_confidence
     assert config.model_type == "resnet"
     assert config.inference_dtype == "float16"
+    assert config.train_dtype == "bfloat16"
     assert not config.reference_eval_enabled
     assert config.reference_games == 20
 
 
 def test_hydra_training_epochs_default_to_one():
     assert compose_run_config([]).train_num_epochs == 1
+
+
+def test_training_dtype_auto_uses_float32_on_cpu():
+    assert RunConfig().resolved_train_dtype("cpu") == "float32"
+
+
+def test_training_dtype_auto_uses_bfloat16_on_supported_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+
+    assert RunConfig().resolved_train_dtype("cuda") == "bfloat16"
+
+
+def test_bfloat16_training_rejects_cpu():
+    config = RunConfig(device="cpu", train_dtype="bfloat16")
+
+    with pytest.raises(ValueError, match="bfloat16 training requires CUDA"):
+        config.validate()
 
 
 @pytest.mark.parametrize(
@@ -170,6 +190,7 @@ def test_hydra_defaults_use_160_game_score_only_promotion_gate():
     [
         "hardware.device=banana",
         "hardware.inference_dtype=bfloat16",
+        "training.dtype=float16",
         "model.type=other",
         "training.symmetry_augmentation=3",
         "training.epochs=abc",

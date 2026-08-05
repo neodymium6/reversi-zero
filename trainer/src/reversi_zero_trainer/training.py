@@ -34,6 +34,7 @@ class TrainingConfig:
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
     symmetry_augmentation: Literal[1, 2, 4, 8] = 8
+    dtype: Literal["float32", "bfloat16"] = "float32"
 
     # Device
     device: Literal["cuda", "cpu"] = "cuda"
@@ -45,6 +46,8 @@ class TrainingConfig:
     def __post_init__(self) -> None:
         if self.symmetry_augmentation not in (1, 2, 4, 8):
             raise ValueError("symmetry_augmentation must be one of 1, 2, 4, or 8")
+        if self.dtype == "bfloat16" and self.device != "cuda":
+            raise ValueError("bfloat16 training requires CUDA")
         self.checkpoint_dir = Path(self.checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -184,13 +187,17 @@ class AlphaZeroTrainer:
             target_policies = target_policies.to(self.device)
             target_values = target_values.to(self.device)
 
-            # Forward pass
-            policy_logits, value_pred = self.model(states)
-
-            # Compute loss
-            total_loss, policy_loss, value_loss = self.compute_loss(
-                policy_logits, value_pred, target_policies, target_values
-            )
+            # BF16 autocast accelerates CUDA tensor-core training while keeping
+            # model parameters, optimizer state, and loss accumulation in FP32.
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.bfloat16,
+                enabled=self.config.dtype == "bfloat16",
+            ):
+                policy_logits, value_pred = self.model(states)
+                total_loss, policy_loss, value_loss = self.compute_loss(
+                    policy_logits, value_pred, target_policies, target_values
+                )
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -330,6 +337,8 @@ class AlphaZeroTrainer:
             self.config = checkpoint["config"]
             if "symmetry_augmentation" not in vars(self.config):
                 self.config.symmetry_augmentation = 1
+            if "dtype" not in vars(self.config):
+                self.config.dtype = "float32"
             # Ensure checkpoint_dir is a Path object
             self.config.checkpoint_dir = Path(self.config.checkpoint_dir)
 

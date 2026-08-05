@@ -22,6 +22,12 @@ class InferenceDtype(str, Enum):
     float16 = "float16"
 
 
+class TrainingDtype(str, Enum):
+    auto = "auto"
+    float32 = "float32"
+    bfloat16 = "bfloat16"
+
+
 class ModelType(str, Enum):
     dummy = "dummy"
     resnet = "resnet"
@@ -72,6 +78,7 @@ class TrainingSettings:
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
+    dtype: TrainingDtype = TrainingDtype.auto
 
 
 @dataclass

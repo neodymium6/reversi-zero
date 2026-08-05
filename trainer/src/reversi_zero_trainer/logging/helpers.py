@@ -171,6 +171,7 @@ def log_hyperparameters(
     logger.log_param("train_weight_decay", train_config.weight_decay)
     logger.log_param("train_policy_loss_weight", train_config.policy_loss_weight)
     logger.log_param("train_value_loss_weight", train_config.value_loss_weight)
+    logger.log_param("train_dtype", train_config.dtype)
 
     # Model parameters
     logger.log_param("model_type", model_config["type"])
