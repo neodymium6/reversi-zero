@@ -1,7 +1,6 @@
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
 use reversi_core::{BOARD_FEATURE_COUNT, Board};
-use std::collections::HashSet;
 
 use crate::backup::backup;
 use crate::config::MctsConfig;
@@ -51,13 +50,13 @@ impl Mcts {
         // 3. Run simulations (optionally batched)
         let batch_size = config.batch_size.max(1);
         let mut sims_done = 0;
+        let mut leaf_ids = Vec::with_capacity(batch_size as usize);
         while sims_done < config.num_simulations {
             let remaining = (config.num_simulations - sims_done) as usize;
             let current_batch = remaining.min(batch_size as usize);
 
             // Select a batch of leaves
-            let mut leaf_ids = Vec::with_capacity(current_batch);
-            let mut selected_leaves = HashSet::with_capacity(current_batch);
+            leaf_ids.clear();
             for _ in 0..current_batch {
                 let leaf_id = select(&self.tree, root_id, config.c_puct);
 
@@ -65,7 +64,7 @@ impl Mcts {
                 // different leaf. A forced line or an extremely strong prior
                 // can still return the same leaf, so stop this batch rather
                 // than expanding that node twice.
-                if !selected_leaves.insert(leaf_id) {
+                if leaf_ids.contains(&leaf_id) {
                     break;
                 }
 
@@ -84,7 +83,7 @@ impl Mcts {
             let simulations_in_batch = leaf_ids.len() as u32;
 
             // Backup each value along the selected path
-            for (leaf_id, value) in leaf_ids.into_iter().zip(values.into_iter()) {
+            for (&leaf_id, value) in leaf_ids.iter().zip(values.into_iter()) {
                 backup(&mut self.tree, leaf_id, value);
             }
 
@@ -298,6 +297,7 @@ mod tests {
     use super::*;
 
     use crate::tree::MctsTree;
+    use std::collections::HashSet;
     use tch::{Device, Kind, Tensor};
 
     struct BatchedDummyModel;

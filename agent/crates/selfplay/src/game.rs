@@ -112,16 +112,7 @@ pub fn game_to_training_examples(record: &GameRecord) -> Vec<crate::data::Traini
 
 /// Convert Board to flat vector for neural network input
 fn board_to_vec(board: &Board) -> Vec<f32> {
-    // Use Board::to_tensor() and extract data
-    let tensor = board.to_tensor();
-    let mut vec = vec![0.0f32; 3 * 8 * 8];
-    let len = vec.len();
-
-    // Copy tensor data to vector
-    // Safety: The tensor is contiguous and has exactly 192 elements
-    tensor.copy_data(&mut vec, len);
-
-    vec
+    board.to_features().to_vec()
 }
 
 /// Calculate the value (game outcome) for a position
@@ -201,5 +192,18 @@ mod tests {
         let board = Board::new();
         let vec = board_to_vec(&board);
         assert_eq!(vec.len(), 3 * 8 * 8);
+    }
+
+    #[test]
+    fn test_board_to_vec_matches_tensor_encoding() {
+        let mut board = Board::new();
+        let first_move = board.get_legal_moves_vec()[0];
+        board.do_move(first_move).unwrap();
+
+        let expected = board.to_tensor();
+        let mut expected_values = vec![0.0f32; 3 * 8 * 8];
+        expected.copy_data(&mut expected_values, 3 * 8 * 8);
+
+        assert_eq!(board_to_vec(&board), expected_values);
     }
 }
