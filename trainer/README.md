@@ -58,7 +58,9 @@ FP32 training weights and checkpoints. CPU runs automatically use FP32:
 ```
 
 The Rust inference boundary remains FP32; casting is contained inside the
-exported model. Use `--inference-dtype float32` to override the CUDA default.
+exported model. FP16 exports use channels-last internally to avoid repeated
+cuDNN layout conversions. Use `--inference-dtype float32` to override the CUDA
+default.
 
 Evaluate a trained snapshot against its initial model with fixed paired
 openings:

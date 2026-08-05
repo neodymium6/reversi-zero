@@ -283,14 +283,18 @@ def prepare_run(config: RunConfig) -> RunState:
 
 
 class _Float16InferenceWrapper(torch.nn.Module):
-    """Keep the Rust boundary FP32 while running the network in FP16."""
+    """Keep the Rust boundary FP32 while running FP16 channels-last inference."""
 
     def __init__(self, model: torch.nn.Module) -> None:
         super().__init__()
         self.model = model
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        policy, value = self.model(inputs.to(dtype=torch.float16))
+        inference_inputs = inputs.to(
+            dtype=torch.float16,
+            memory_format=torch.channels_last,
+        )
+        policy, value = self.model(inference_inputs)
         return policy.float(), value.float()
 
 
@@ -308,7 +312,11 @@ def export_model_to_torchscript(
         if device != "cuda":
             raise ValueError("float16 inference requires CUDA")
         export_model = _Float16InferenceWrapper(
-            copy.deepcopy(model).to(device=device, dtype=torch.float16)
+            copy.deepcopy(model).to(
+                device=device,
+                dtype=torch.float16,
+                memory_format=torch.channels_last,
+            )
         ).eval()
     dummy_input = torch.randn(1, 3, 8, 8, device=device)
     traced_model = torch.jit.trace(export_model, dummy_input)

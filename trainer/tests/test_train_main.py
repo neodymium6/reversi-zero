@@ -5,9 +5,11 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+import torch
 
 from reversi_zero_trainer.train_main import (
     RunConfig,
+    _Float16InferenceWrapper,
     default_run_dir,
     parse_args,
     prepare_run,
@@ -118,6 +120,23 @@ def test_inference_dtype_defaults_to_float16_on_cuda_and_float32_on_cpu():
 
     assert config.resolved_inference_dtype("cuda") == "float16"
     assert config.resolved_inference_dtype("cpu") == "float32"
+
+
+def test_float16_wrapper_uses_channels_last_and_returns_float32():
+    class LayoutProbe(torch.nn.Module):
+        def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            assert inputs.dtype == torch.float16
+            assert inputs.is_contiguous(memory_format=torch.channels_last)
+            batch_size = inputs.size(0)
+            return (
+                torch.zeros(batch_size, 64, dtype=inputs.dtype),
+                torch.zeros(batch_size, 1, dtype=inputs.dtype),
+            )
+
+    policy, value = _Float16InferenceWrapper(LayoutProbe())(torch.zeros(2, 3, 8, 8))
+
+    assert policy.dtype == torch.float32
+    assert value.dtype == torch.float32
 
 
 def test_cpu_runtime_defaults_are_tuned_for_selfplay():
