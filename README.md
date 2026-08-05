@@ -151,9 +151,10 @@ Each opening is played twice with colors swapped. Evaluation uses
 an approximate 95% confidence interval. The report contains the exact opening
 suite and can be reused in another comparison:
 
-On CPU, each Arena MCTS process uses one Torch thread by default to avoid
-oversubscribing the machine. Use `--torch-threads N` to override this when
-benchmarking a dedicated host; CUDA evaluation keeps Torch's normal defaults.
+Model-vs-model evaluation runs in the native Rust Arena and batches inference
+across up to 16 concurrent games. Fixed non-model opponents continue to use
+Arena player processes. On CPU, each MCTS player process uses one Torch thread
+by default; CUDA evaluation keeps Torch's normal defaults.
 
 ```bash
 ./scripts/evaluate \
@@ -288,7 +289,7 @@ pre-commit run --all-files
 1. **Model Export**: PyTorch models traced to TorchScript format (`.pt`)
 2. **Self-Play**: Rust loads TorchScript, runs MCTS, saves NumPy arrays
 3. **Training**: Python loads NumPy arrays, trains model, exports TorchScript
-4. **Evaluation**: Python spawns Rust player processes via Arena
+4. **Evaluation**: Rust batches model matches natively; fixed opponents use Arena processes
 
 ### Data Flow
 

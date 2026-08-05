@@ -106,6 +106,17 @@ impl Board {
         self.inner.get_turn()
     }
 
+    /// Return absolute black/white piece counts regardless of the side to move.
+    pub fn piece_counts(&self) -> (u32, u32) {
+        let (player, opponent, turn) = self.inner.get_board();
+        let player_count = player.count_ones();
+        let opponent_count = opponent.count_ones();
+        match turn {
+            Turn::Black => (player_count, opponent_count),
+            Turn::White => (opponent_count, player_count),
+        }
+    }
+
     pub fn is_win(&self) -> Result<bool, BoardError> {
         self.inner.is_win()
     }

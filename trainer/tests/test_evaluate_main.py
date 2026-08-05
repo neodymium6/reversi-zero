@@ -1,8 +1,10 @@
 import pytest
 
+import reversi_zero_trainer.evaluate_main as evaluate_main
 from reversi_zero_trainer.evaluate_main import (
     _bitmatrix_command,
     _mcts_command,
+    _run_batched_model_arena,
     opening_suite_sha256,
     parse_args,
     score_interval,
@@ -137,3 +139,32 @@ def test_evaluation_rejects_non_positive_expansion_batch_size(tmp_path, flag):
                 "0",
             ]
         )
+
+
+def test_batched_model_arena_preserves_opening_order(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_evaluate_models(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return (3, 2, 1, 101, 99)
+
+    monkeypatch.setattr(evaluate_main, "evaluate_models", fake_evaluate_models)
+    openings = generate_openings(count=3, plies=4, seed=7)
+
+    result = _run_batched_model_arena(
+        tmp_path / "challenger.pt",
+        tmp_path / "reference.pt",
+        openings,
+        device="cuda",
+        simulations=100,
+        c_puct=1.5,
+        expansion_batch_size=4,
+    )
+
+    assert result == (3, 2, 1, 101, 99)
+    assert captured["args"][2] == [list(opening.moves) for opening in openings]
+    assert captured["kwargs"]["game_concurrency"] == 6
+    mcts = captured["kwargs"]["mcts"]
+    assert mcts.num_simulations == 100
+    assert mcts.expansion_batch_size == 4

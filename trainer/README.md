@@ -91,9 +91,10 @@ openings:
   --output runs/experiment-001/evaluations/iter2-vs-iter0.json
 ```
 
-CPU evaluation limits each Arena MCTS process to one Torch thread by default,
-preventing the concurrent player processes from oversubscribing the machine.
-This can be overridden with `--torch-threads N`; CUDA keeps Torch's defaults.
+Model-vs-model evaluation uses the native Rust Arena and fixed-shape inference
+batches across up to 16 concurrent games. Fixed non-model opponents continue
+to use Arena player processes. CPU MCTS player processes use one Torch thread
+by default; CUDA keeps Torch's defaults.
 
 Use `../scripts/evaluate --help` for fixed Alpha-Beta/BitMatrix/Random references,
 opening-suite reuse, independent challenger/reference expansion batch sizes,

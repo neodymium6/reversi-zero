@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+from reversi_zero_rs import MctsConfigArgs, evaluate_models
 from rust_reversi import Arena
 
 from reversi_zero_trainer.openings import (
@@ -232,6 +233,37 @@ def _bitmatrix_command(openings_path: Path, depth: int) -> list[str]:
     ]
 
 
+def _run_batched_model_arena(
+    challenger: Path,
+    reference: Path,
+    openings: list[Opening],
+    device: str,
+    simulations: int,
+    c_puct: float,
+    expansion_batch_size: int,
+) -> tuple[int, int, int, int, int]:
+    """Run paired games natively, batching inference across independent games."""
+    game_concurrency = _model_arena_game_concurrency(openings)
+    return evaluate_models(
+        str(challenger),
+        str(reference),
+        [list(opening.moves) for opening in openings],
+        device=device,
+        game_concurrency=game_concurrency,
+        batch_timeout_ms=1,
+        mcts=MctsConfigArgs(
+            num_simulations=simulations,
+            c_puct=c_puct,
+            temperature=0.0,
+            expansion_batch_size=expansion_batch_size,
+        ),
+    )
+
+
+def _model_arena_game_concurrency(openings: list[Opening]) -> int:
+    return min(16, len(openings) * 2)
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     challenger = args.challenger.resolve()
     if not challenger.is_file():
@@ -252,25 +284,46 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="reversi-zero-eval-") as tmp_dir:
         openings_path = Path(tmp_dir) / "openings.json"
         write_opening_suite(openings, openings_path)
-        challenger_command = _mcts_command(
-            challenger,
-            openings_path,
-            actual_device,
-            args.simulations,
-            args.c_puct,
-            args.torch_threads,
-            args.challenger_expansion_batch_size,
-        )
         reference_command, reference_metadata = _reference_command(
             args, openings_path, actual_device
         )
-
-        arena = Arena(
-            challenger_command, reference_command, show_progress=args.show_progress
+        use_batched_model_arena = (
+            args.reference_model is not None
+            and args.challenger_expansion_batch_size
+            == args.reference_expansion_batch_size
         )
-        arena.play_n(len(openings) * 2)
-        wins, losses, draws = arena.get_stats()
-        challenger_pieces, reference_pieces = arena.get_pieces()
+        if use_batched_model_arena:
+            wins, losses, draws, challenger_pieces, reference_pieces = (
+                _run_batched_model_arena(
+                    challenger,
+                    args.reference_model.resolve(),
+                    openings,
+                    actual_device,
+                    args.simulations,
+                    args.c_puct,
+                    args.challenger_expansion_batch_size,
+                )
+            )
+            arena_backend = "native_batched"
+            model_game_concurrency = _model_arena_game_concurrency(openings)
+        else:
+            challenger_command = _mcts_command(
+                challenger,
+                openings_path,
+                actual_device,
+                args.simulations,
+                args.c_puct,
+                args.torch_threads,
+                args.challenger_expansion_batch_size,
+            )
+            arena = Arena(
+                challenger_command, reference_command, show_progress=args.show_progress
+            )
+            arena.play_n(len(openings) * 2)
+            wins, losses, draws = arena.get_stats()
+            challenger_pieces, reference_pieces = arena.get_pieces()
+            arena_backend = "process"
+            model_game_concurrency = None
 
     games = wins + losses + draws
     score = (wins + 0.5 * draws) / games
@@ -293,6 +346,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "simulations": args.simulations,
             "c_puct": args.c_puct,
             "temperature": 0.0,
+            "arena_backend": arena_backend,
+            "model_game_concurrency": model_game_concurrency,
             "challenger_expansion_batch_size": (args.challenger_expansion_batch_size),
             "reference_expansion_batch_size": (
                 args.reference_expansion_batch_size

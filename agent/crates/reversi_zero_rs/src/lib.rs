@@ -1,4 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
+mod model_arena;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -469,6 +471,79 @@ fn cuda_built() -> bool {
     option_env!("REVERSI_ZERO_CUDA_LINKED") == Some("1")
 }
 
+/// Evaluate two models over paired openings while batching inference across games.
+#[pyfunction]
+#[pyo3(signature = (
+    challenger_path,
+    reference_path,
+    openings,
+    device=None,
+    game_concurrency=16,
+    batch_timeout_ms=1,
+    mcts=None,
+))]
+fn evaluate_models(
+    challenger_path: String,
+    reference_path: String,
+    openings: Vec<Vec<usize>>,
+    device: Option<String>,
+    game_concurrency: u32,
+    batch_timeout_ms: u64,
+    mcts: Option<MctsConfigArgs>,
+) -> PyResult<(u32, u32, u32, u64, u64)> {
+    if game_concurrency == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "game_concurrency must be > 0",
+        ));
+    }
+    if batch_timeout_ms == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "batch_timeout_ms must be > 0",
+        ));
+    }
+
+    let device = resolve_device(device.as_deref())?;
+    let config = build_eval_mcts_config(mcts)?;
+    let games_per_model = game_concurrency.div_ceil(2);
+    let inference_batch_size =
+        clamp_batch_size(games_per_model.saturating_mul(config.batch_size)) as usize;
+    let timeout = Duration::from_millis(clamp_timeout(batch_timeout_ms));
+    let challenger = NnModel::load(&challenger_path, device).map_err(|error| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to load challenger model from {challenger_path}: {error}"
+        ))
+    })?;
+    let reference = NnModel::load(&reference_path, device).map_err(|error| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to load reference model from {reference_path}: {error}"
+        ))
+    })?;
+    let challenger = BatchingModel::new_padded(challenger, inference_batch_size, timeout);
+    let reference = BatchingModel::new_padded(reference, inference_batch_size, timeout);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(game_concurrency as usize)
+        .build()
+        .map_err(|error| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to build model Arena thread pool: {error}"
+            ))
+        })?;
+    let summary = model_arena::evaluate_models(&challenger, &reference, &config, &openings, &pool)
+        .map_err(|error| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Model Arena failed: {error}"
+            ))
+        })?;
+
+    Ok((
+        summary.wins,
+        summary.losses,
+        summary.draws,
+        summary.challenger_pieces,
+        summary.reference_pieces,
+    ))
+}
+
 #[pymodule]
 fn reversi_zero_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<BatchConfigArgs>()?;
@@ -478,6 +553,7 @@ fn reversi_zero_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<MctsPlayer>()?;
     m.add_function(wrap_pyfunction!(cuda_available, m)?)?;
     m.add_function(wrap_pyfunction!(cuda_built, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_models, m)?)?;
     Ok(())
 }
 

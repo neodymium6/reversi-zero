@@ -1,6 +1,6 @@
 """Type stubs for reversi_zero_rs Rust module."""
 
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Sequence, Tuple
 
 class MctsConfigArgs:
     """MCTS configuration arguments."""
@@ -106,3 +106,13 @@ class MctsPlayer:
 
     def select_move(self, board_str: str, turn: str) -> int:
         """Return best move index (0-63). Returns -1 when no move is available."""
+
+def evaluate_models(
+    challenger_path: str,
+    reference_path: str,
+    openings: Sequence[Sequence[int]],
+    device: Optional[str] = None,
+    game_concurrency: int = 16,
+    batch_timeout_ms: int = 1,
+    mcts: Optional[MctsConfigArgs] = None,
+) -> Tuple[int, int, int, int, int]: ...

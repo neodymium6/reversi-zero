@@ -39,11 +39,24 @@ impl<M: PolicyValueModel + Send + Sync + 'static> BatchingModel<M> {
     /// - `batch_size`: maximum items per batch (>=1)
     /// - `timeout`: maximum time to wait before flushing a partial batch
     pub fn new(base_model: M, batch_size: usize, timeout: Duration) -> Self {
+        Self::build(base_model, batch_size, timeout, false)
+    }
+
+    /// Create a batching wrapper that pads every forward pass to `batch_size`.
+    ///
+    /// Fixed shapes make evaluation reproducible even when thread scheduling
+    /// changes how many requests arrive before the timeout.
+    pub fn new_padded(base_model: M, batch_size: usize, timeout: Duration) -> Self {
+        Self::build(base_model, batch_size, timeout, true)
+    }
+
+    fn build(base_model: M, batch_size: usize, timeout: Duration, pad_batches: bool) -> Self {
         let batch_size = batch_size.max(1);
         let (tx, rx) = bounded::<BatchWork>(batch_size * 4);
 
         let device = base_model.device();
-        let handle = thread::spawn(move || worker_loop(base_model, batch_size, timeout, rx));
+        let handle =
+            thread::spawn(move || worker_loop(base_model, batch_size, timeout, pad_batches, rx));
 
         Self {
             inner: Arc::new(BatchingInner {
@@ -136,6 +149,7 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
     model: M,
     batch_size: usize,
     timeout: Duration,
+    pad_batches: bool,
     rx: Receiver<BatchWork>,
 ) {
     let mut pending = None;
@@ -180,7 +194,13 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
         for work in &works {
             combined.extend_from_slice(&work.features);
         }
-        let forward_result = model.evaluate_batch(&combined, sample_count);
+        let forward_sample_count = if pad_batches {
+            batch_size.max(sample_count)
+        } else {
+            sample_count
+        };
+        combined.resize(forward_sample_count * BOARD_FEATURE_COUNT, 0.0);
+        let forward_result = model.evaluate_batch(&combined, forward_sample_count);
 
         match forward_result {
             Ok((policy_batch, value_batch)) => {
@@ -320,6 +340,25 @@ mod tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(largest_batch.load(Ordering::SeqCst), 8);
+    }
+
+    #[test]
+    fn padded_batches_use_a_fixed_forward_shape() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let largest_batch = Arc::new(AtomicUsize::new(0));
+        let model = RecordingModel {
+            calls: Arc::clone(&calls),
+            largest_batch: Arc::clone(&largest_batch),
+        };
+        let batching = BatchingModel::new_padded(model, 8, Duration::from_millis(1));
+        let features = vec![0.0; 2 * BOARD_FEATURE_COUNT];
+
+        let (policies, values) = batching.evaluate_batch(&features, 2).unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(largest_batch.load(Ordering::SeqCst), 8);
+        assert_eq!(policies.len(), 2 * 64);
+        assert_eq!(values.len(), 2);
     }
 
     #[test]
