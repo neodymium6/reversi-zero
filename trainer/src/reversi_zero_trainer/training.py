@@ -15,7 +15,7 @@ from rust_reversi import Arena
 from torch.optim import AdamW, Optimizer
 from torch.utils.data import DataLoader
 
-from reversi_zero_trainer.data import SelfPlayDataset
+from reversi_zero_trainer.data import SelfPlayDataset, SymmetryAugmentedDataset
 
 
 @dataclass
@@ -30,6 +30,7 @@ class TrainingConfig:
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
+    symmetry_augmentation: Literal[1, 2, 4, 8] = 8
 
     # Device
     device: Literal["cuda", "cpu"] = "cuda"
@@ -51,6 +52,8 @@ class TrainingConfig:
     arena_device: str | None = None  # None = use training device
 
     def __post_init__(self) -> None:
+        if self.symmetry_augmentation not in (1, 2, 4, 8):
+            raise ValueError("symmetry_augmentation must be one of 1, 2, 4, or 8")
         self.checkpoint_dir = Path(self.checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,16 +96,35 @@ class AlphaZeroTrainer:
         self.batch_step = 0  # Total number of batches processed
         self.total_epochs_trained = 0
 
-    def _create_dataloader(self, data_path: Path | str) -> DataLoader:
-        """Create dataloader from data path."""
-        dataset = SelfPlayDataset(data_path)
-        return DataLoader(
-            dataset,
-            batch_size=self.config.batch_size,
-            shuffle=True,
-            num_workers=self.config.num_workers,
-            pin_memory=self.config.device == "cuda",
+    def _create_dataloaders(
+        self, data_path: Path | str
+    ) -> tuple[DataLoader, DataLoader]:
+        """Create augmented training and unmodified evaluation dataloaders."""
+        evaluation_dataset = SelfPlayDataset(data_path)
+        training_dataset = (
+            evaluation_dataset
+            if self.config.symmetry_augmentation == 1
+            else SymmetryAugmentedDataset(
+                evaluation_dataset,
+                symmetry_count=self.config.symmetry_augmentation,
+            )
         )
+        common_options = {
+            "batch_size": self.config.batch_size,
+            "num_workers": self.config.num_workers,
+            "pin_memory": self.config.device == "cuda",
+        }
+        training_dataloader = DataLoader(
+            training_dataset,
+            shuffle=True,
+            **common_options,
+        )
+        evaluation_dataloader = DataLoader(
+            evaluation_dataset,
+            shuffle=False,
+            **common_options,
+        )
+        return training_dataloader, evaluation_dataloader
 
     def compute_loss(
         self,
@@ -428,6 +450,8 @@ class AlphaZeroTrainer:
         # Restore config if available
         if "config" in checkpoint:
             self.config = checkpoint["config"]
+            if "symmetry_augmentation" not in vars(self.config):
+                self.config.symmetry_augmentation = 1
             # Ensure checkpoint_dir is a Path object
             self.config.checkpoint_dir = Path(self.config.checkpoint_dir)
 
@@ -458,18 +482,17 @@ class AlphaZeroTrainer:
             for metrics in trainer.train("data/selfplay_iter2"):
                 logger.log_metric("loss", metrics["loss/total"])
         """
-        # Create dataloader from path
-        dataloader = self._create_dataloader(data_path)
+        training_dataloader, evaluation_dataloader = self._create_dataloaders(data_path)
 
         if num_epochs is None:
             num_epochs = self.config.num_epochs
 
         for epoch in range(num_epochs):
             # Train one epoch
-            train_metrics = self.train_epoch(dataloader)
+            train_metrics = self.train_epoch(training_dataloader)
 
             # Evaluate
-            eval_metrics = self.evaluate(dataloader)
+            eval_metrics = self.evaluate(evaluation_dataloader)
 
             # Arena evaluations (only on last epoch to save time)
             arena_metrics = {}

@@ -3,10 +3,19 @@ Training data loading utilities for AlphaZero self-play data.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+SymmetryCount = Literal[1, 2, 4, 8]
+_SYMMETRY_INDICES: dict[int, tuple[int, ...]] = {
+    1: (0,),
+    2: (0, 4),
+    4: (0, 1, 2, 3),
+    8: (0, 1, 2, 3, 4, 5, 6, 7),
+}
 
 
 class SelfPlayDataset(Dataset):
@@ -92,3 +101,49 @@ class SelfPlayDataset(Dataset):
             "negative_values": float((self.values < 0).sum()),
             "zero_values": float((self.values == 0).sum()),
         }
+
+
+class SymmetryAugmentedDataset(Dataset):
+    """Lazily expose D4 rotations/reflections of self-play examples."""
+
+    def __init__(
+        self,
+        dataset: SelfPlayDataset,
+        symmetry_count: SymmetryCount = 8,
+    ) -> None:
+        if symmetry_count not in _SYMMETRY_INDICES:
+            raise ValueError("symmetry_count must be one of 1, 2, 4, or 8")
+        self.dataset = dataset
+        self.symmetry_count = symmetry_count
+        self.symmetry_indices = _SYMMETRY_INDICES[symmetry_count]
+
+    def __len__(self) -> int:
+        return len(self.dataset) * self.symmetry_count
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if idx < 0:
+            idx += len(self)
+        if idx < 0 or idx >= len(self):
+            raise IndexError(idx)
+
+        source_idx, symmetry_slot = divmod(idx, self.symmetry_count)
+        symmetry_idx = self.symmetry_indices[symmetry_slot]
+        state, policy, value = self.dataset[source_idx]
+        policy_board = policy.view(8, 8)
+
+        rotation = symmetry_idx % 4
+        if symmetry_idx >= 4:
+            state = torch.flip(state, dims=(-1,))
+            policy_board = torch.flip(policy_board, dims=(-1,))
+        if rotation:
+            state = torch.rot90(state, rotation, dims=(-2, -1))
+            policy_board = torch.rot90(policy_board, rotation, dims=(-2, -1))
+
+        return state.contiguous(), policy_board.reshape(64).contiguous(), value
+
+    def get_stats(self) -> dict[str, float]:
+        stats = self.dataset.get_stats()
+        stats["num_samples"] = float(len(self))
+        for key in ("positive_values", "negative_values", "zero_values"):
+            stats[key] *= self.symmetry_count
+        return stats

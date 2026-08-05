@@ -212,9 +212,11 @@ selfplay_expansion_batch_size = 4          # Validated expansion batch size
 
 ```python
 # Training configuration
+seed = 0                                    # PyTorch initialization/shuffle seed
 batch_size = 256                           # Training batch size
 num_workers = 0                            # CPU default; 4 on CUDA
 num_epochs = 10                            # Epochs per iteration
+symmetry_augmentation = 8                  # Lazy D4 multiplier; eval stays unaugmented
 learning_rate = 0.001                      # Adam learning rate
 weight_decay = 1e-4                        # L2 regularization
 ```

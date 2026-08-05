@@ -50,6 +50,14 @@ The in-memory self-play dataset also defaults to zero DataLoader workers on
 CPU, avoiding multiprocessing startup and transfer overhead. CUDA retains four
 workers. Use `--num-workers N` to override either default.
 
+Training lazily applies all eight rotations/reflections to each self-play
+example by default. The NPY files are not duplicated, and evaluation uses the
+original examples only. Use `--symmetry-augmentation 1`, `2`, `4`, or `8` to
+control the training-example multiplier.
+
+Use `--seed N` to give comparison runs identical PyTorch model initialization
+and training-shuffle seeds. Rust self-play remains stochastic.
+
 CUDA runs export self-play TorchScript models in FP16 by default while retaining
 FP32 training weights and checkpoints. CPU runs automatically use FP32:
 

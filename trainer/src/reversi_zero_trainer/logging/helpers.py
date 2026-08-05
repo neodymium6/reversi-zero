@@ -64,6 +64,7 @@ def log_training_metrics(
 def log_hyperparameters(
     logger: BaseLogger,
     num_iterations: int,
+    seed: int,
     selfplay_config: dict[str, Any],
     train_config: TrainingConfig,
     model_config: dict[str, Any],
@@ -76,6 +77,7 @@ def log_hyperparameters(
     Args:
         logger: Logger instance
         num_iterations: Number of training iterations
+        seed: PyTorch seed for model initialization and training shuffles
         selfplay_config: Self-play configuration
         train_config: Training configuration
         model_config: Model configuration
@@ -86,6 +88,7 @@ def log_hyperparameters(
     # Global settings
     logger.log_param("num_iterations", num_iterations)
     logger.log_param("device", device)
+    logger.log_param("seed", seed)
 
     # Self-play parameters
     logger.log_param("selfplay_games_per_iter", selfplay_config["games_per_iter"])
@@ -103,6 +106,7 @@ def log_hyperparameters(
     logger.log_param("train_batch_size", train_config.batch_size)
     logger.log_param("train_num_workers", train_config.num_workers)
     logger.log_param("train_num_epochs", train_config.num_epochs)
+    logger.log_param("train_symmetry_augmentation", train_config.symmetry_augmentation)
     logger.log_param("train_learning_rate", train_config.learning_rate)
     logger.log_param("train_weight_decay", train_config.weight_decay)
     logger.log_param("train_policy_loss_weight", train_config.policy_loss_weight)

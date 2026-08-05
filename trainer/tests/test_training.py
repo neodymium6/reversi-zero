@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from reversi_zero_trainer.data import SelfPlayDataset
+from reversi_zero_trainer.data import SelfPlayDataset, SymmetryAugmentedDataset
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
@@ -58,6 +58,50 @@ def test_selfplay_dataset_loading(dummy_training_data):
     assert "std_value" in stats
 
 
+def test_symmetry_augmentation_transforms_state_and_policy_together(tmp_path):
+    grid = np.arange(64, dtype=np.float32).reshape(8, 8)
+    states = np.zeros((1, 3, 8, 8), dtype=np.float32)
+    states[0, 0] = grid
+    policies = grid.reshape(1, 64)
+    values = np.array([0.5], dtype=np.float32)
+    np.save(tmp_path / "states.npy", states)
+    np.save(tmp_path / "policies.npy", policies)
+    np.save(tmp_path / "values.npy", values)
+
+    base_dataset = SelfPlayDataset(tmp_path)
+    dataset = SymmetryAugmentedDataset(base_dataset, symmetry_count=8)
+
+    assert len(dataset) == 8
+    transformed_policies = set()
+    for idx in range(8):
+        state, policy, value = dataset[idx]
+        assert torch.equal(state[0].reshape(64), policy)
+        assert value.item() == pytest.approx(0.5)
+        transformed_policies.add(tuple(policy.tolist()))
+    assert len(transformed_policies) == 8
+    assert torch.equal(dataset[0][0], base_dataset[0][0])
+    assert torch.equal(dataset[0][1], base_dataset[0][1])
+
+
+@pytest.mark.parametrize("symmetry_count", [1, 2, 4, 8])
+def test_symmetry_augmentation_supported_lengths(dummy_training_data, symmetry_count):
+    base_dataset = SelfPlayDataset(dummy_training_data)
+    dataset = SymmetryAugmentedDataset(
+        base_dataset,
+        symmetry_count=symmetry_count,
+    )
+
+    assert len(dataset) == len(base_dataset) * symmetry_count
+
+
+def test_symmetry_augmentation_rejects_invalid_count(dummy_training_data):
+    with pytest.raises(ValueError, match="one of 1, 2, 4, or 8"):
+        SymmetryAugmentedDataset(  # type: ignore[arg-type]
+            SelfPlayDataset(dummy_training_data),
+            symmetry_count=3,
+        )
+
+
 def test_trainer_initialization():
     """Test that trainer can be initialized."""
     model = DummyReversiNet()
@@ -65,6 +109,7 @@ def test_trainer_initialization():
         batch_size=32,
         num_workers=0,
         num_epochs=2,
+        symmetry_augmentation=1,
         device="cpu",
     )
 
@@ -81,6 +126,7 @@ def test_training_single_epoch(dummy_training_data):
         batch_size=32,
         num_workers=0,
         num_epochs=2,
+        symmetry_augmentation=1,
         device="cpu",
     )
 
@@ -103,6 +149,26 @@ def test_training_single_epoch(dummy_training_data):
     assert metrics["batch_step"] > 0
 
 
+def test_training_uses_augmented_data_but_evaluation_does_not(
+    dummy_training_data,
+):
+    model = DummyReversiNet()
+    config = TrainingConfig(
+        batch_size=32,
+        num_workers=0,
+        symmetry_augmentation=8,
+        device="cpu",
+    )
+    trainer = AlphaZeroTrainer(model=model, config=config)
+
+    training_dataloader, evaluation_dataloader = trainer._create_dataloaders(
+        dummy_training_data
+    )
+
+    assert len(training_dataloader.dataset) == 800
+    assert len(evaluation_dataloader.dataset) == 100
+
+
 def test_training_multiple_epochs(dummy_training_data):
     """Test that we can train for multiple epochs."""
     model = DummyReversiNet()
@@ -110,6 +176,7 @@ def test_training_multiple_epochs(dummy_training_data):
         batch_size=32,
         num_workers=0,
         num_epochs=3,
+        symmetry_augmentation=1,
         device="cpu",
     )
 
@@ -130,6 +197,7 @@ def test_trainer_reuse_with_different_data(dummy_training_data):
         batch_size=32,
         num_workers=0,
         num_epochs=2,
+        symmetry_augmentation=1,
         device="cpu",
     )
 
@@ -153,6 +221,7 @@ def test_checkpoint_save_and_load(dummy_training_data):
         batch_size=32,
         num_workers=0,
         num_epochs=2,
+        symmetry_augmentation=1,
         device="cpu",
     )
 
@@ -179,6 +248,16 @@ def test_checkpoint_save_and_load(dummy_training_data):
 
         assert new_trainer.total_epochs_trained == 2
         assert new_trainer.batch_step == trainer.batch_step
+
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        del checkpoint["config"].symmetry_augmentation
+        legacy_checkpoint_path = Path(tmpdir) / "legacy_checkpoint.pt"
+        torch.save(checkpoint, legacy_checkpoint_path)
+
+        legacy_trainer = AlphaZeroTrainer(model=DummyReversiNet(), config=config)
+        legacy_trainer.load_checkpoint(legacy_checkpoint_path)
+
+        assert legacy_trainer.config.symmetry_augmentation == 1
 
 
 def test_resnet_model():

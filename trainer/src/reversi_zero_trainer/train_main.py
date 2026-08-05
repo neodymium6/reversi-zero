@@ -38,6 +38,7 @@ class RunConfig:
     resume: bool = False
     num_iterations: int = 10
     device: Literal["auto", "cuda", "cpu"] = "auto"
+    seed: int = 0
     torch_threads: int | None = None
 
     selfplay_games_per_iter: int = 128
@@ -53,6 +54,7 @@ class RunConfig:
     train_batch_size: int = 256
     train_num_workers: int | None = None
     train_num_epochs: int = 10
+    train_symmetry_augmentation: Literal[1, 2, 4, 8] = 8
     train_learning_rate: float = 0.001
     train_weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
@@ -144,6 +146,8 @@ class RunConfig:
             raise ValueError(f"These settings must be > 0: {', '.join(invalid)}")
         if self.train_num_workers is not None and self.train_num_workers < 0:
             raise ValueError("train_num_workers must be >= 0")
+        if self.train_symmetry_augmentation not in (1, 2, 4, 8):
+            raise ValueError("train_symmetry_augmentation must be one of 1, 2, 4, or 8")
         device = self.resolved_device()
         if self.resolved_inference_dtype(device) == "float16" and device != "cuda":
             raise ValueError("float16 inference requires CUDA")
@@ -342,6 +346,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-iterations", type=int, default=10)
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="PyTorch seed for model initialization and training shuffles",
+    )
+    parser.add_argument(
         "--torch-threads",
         type=int,
         help="Torch CPU threads for self-play and training (default: 4 on CPU)",
@@ -377,6 +387,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="DataLoader workers (default: 0 on CPU, 4 on CUDA)",
     )
     parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument(
+        "--symmetry-augmentation",
+        type=int,
+        choices=[1, 2, 4, 8],
+        default=8,
+        help="Lazy D4 training-example multiplier (evaluation remains unaugmented)",
+    )
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--policy-loss-weight", type=float, default=1.0)
@@ -401,6 +418,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         resume=args.resume,
         num_iterations=args.num_iterations,
         device=args.device,
+        seed=args.seed,
         torch_threads=args.torch_threads,
         selfplay_games_per_iter=args.games_per_iteration,
         selfplay_report_interval=args.report_interval,
@@ -414,6 +432,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         train_batch_size=args.train_batch_size,
         train_num_workers=args.num_workers,
         train_num_epochs=args.epochs,
+        train_symmetry_augmentation=args.symmetry_augmentation,
         train_learning_rate=args.learning_rate,
         train_weight_decay=args.weight_decay,
         policy_loss_weight=args.policy_loss_weight,
@@ -446,10 +465,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     checkpoints_dir = run_dir / "checkpoints"
     models_dir.mkdir(parents=True, exist_ok=True)
 
+    torch.manual_seed(config.seed)
+    if device == "cuda":
+        torch.cuda.manual_seed_all(config.seed)
+
     train_config = TrainingConfig(
         batch_size=config.train_batch_size,
         num_workers=train_num_workers,
         num_epochs=config.train_num_epochs,
+        symmetry_augmentation=config.train_symmetry_augmentation,
         learning_rate=config.train_learning_rate,
         weight_decay=config.train_weight_decay,
         policy_loss_weight=config.policy_loss_weight,
@@ -501,6 +525,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         log_hyperparameters(
             logger=logger,
             num_iterations=config.num_iterations,
+            seed=config.seed,
             selfplay_config={
                 "games_per_iter": config.selfplay_games_per_iter,
                 "report_interval": config.report_interval(),

@@ -31,9 +31,11 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert (run_dir / "run_config.json").is_file()
     stored = json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))
     assert stored["torch_threads"] == 4
+    assert stored["seed"] == 0
     assert stored["selfplay_batch_size"] == 32
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
     assert stored["train_num_workers"] == 0
+    assert stored["train_symmetry_augmentation"] == 8
     assert stored["inference_dtype"] == "float32"
 
 
@@ -87,10 +89,14 @@ def test_parse_args_maps_training_options():
             "example-run",
             "--num-iterations",
             "2",
+            "--seed",
+            "123",
             "--games-per-iteration",
             "16",
             "--epochs",
             "3",
+            "--symmetry-augmentation",
+            "4",
             "--model",
             "resnet",
             "--inference-dtype",
@@ -101,11 +107,20 @@ def test_parse_args_maps_training_options():
 
     assert config.run_dir == Path("example-run")
     assert config.num_iterations == 2
+    assert config.seed == 123
     assert config.selfplay_games_per_iter == 16
     assert config.train_num_epochs == 3
+    assert config.train_symmetry_augmentation == 4
     assert config.model_type == "resnet"
     assert config.inference_dtype == "float16"
     assert not config.arena_enabled
+
+
+def test_run_config_rejects_invalid_symmetry_augmentation():
+    config = RunConfig(train_symmetry_augmentation=3)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="one of 1, 2, 4, or 8"):
+        config.validate()
 
 
 def test_float16_inference_requires_cuda():
