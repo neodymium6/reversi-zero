@@ -101,12 +101,12 @@ search settings, and promotion thresholds.
 
 Training uses the same paired evaluator as a promotion gate by default. After
 each iteration, the candidate must score at least 55% against the incumbent
-over 40 openings played with both colors, and the 95% interval lower bound must
-exceed 50%. A rejected candidate's model and checkpoint are retained under
-`models/ts/candidates/` and `checkpoints/`, while the incumbent model and
-optimizer are restored for the next iteration. Use `promotion.enabled=false`
-to disable gating or `promotion.require_confidence=false` to use only the score
-threshold.
+over 80 openings played with both colors, for 160 total games. A rejected
+candidate's model and checkpoint are retained under `models/ts/candidates/`
+and `checkpoints/`, while the incumbent model and optimizer are restored for
+the next iteration. Use `promotion.enabled=false` to disable gating or
+`promotion.require_confidence=true` to additionally require the 95% interval
+lower bound to exceed 50%.
 
 After promotion, the selected incumbent is automatically evaluated against
 BitMatrix. Random and Alpha-Beta remain available through the standalone

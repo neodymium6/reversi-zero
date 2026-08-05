@@ -83,14 +83,14 @@ class ReferenceSettings:
 @dataclass
 class PromotionSettings:
     enabled: bool = True
-    openings: int = 40
+    openings: int = 80
     opening_plies: int = 8
     seed: int = 0
     simulations: int | None = None
     c_puct: float = 1.5
     expansion_batch_size: int | None = None
     threshold: float = 0.55
-    require_confidence: bool = True
+    require_confidence: bool = False
 
 
 @dataclass

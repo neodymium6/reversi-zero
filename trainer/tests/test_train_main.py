@@ -50,10 +50,10 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["reference_eval_enabled"] is True
     assert stored["reference_games"] == 40
     assert stored["promotion_enabled"] is True
-    assert stored["promotion_num_openings"] == 40
+    assert stored["promotion_num_openings"] == 80
     assert stored["promotion_mcts_sims"] == 100
     assert stored["promotion_expansion_batch_size"] == 4
-    assert stored["promotion_require_confidence"] is True
+    assert stored["promotion_require_confidence"] is False
     assert stored["inference_dtype"] == "float32"
 
 
@@ -150,6 +150,14 @@ def test_hydra_profile_selects_device(profile, device):
     config = compose_run_config([f"profile={profile}"])
 
     assert config.device == device
+
+
+def test_hydra_defaults_use_160_game_score_only_promotion_gate():
+    config = compose_run_config()
+
+    assert config.promotion_num_openings == 80
+    assert config.promotion_threshold == pytest.approx(0.55)
+    assert not config.promotion_require_confidence
 
 
 @pytest.mark.parametrize(

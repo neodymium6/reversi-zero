@@ -241,9 +241,9 @@ reference_games = 40                       # Total paired games against BitMatri
 
 # Candidate promotion
 promotion_enabled = True                   # Gate each new self-play model
-promotion_num_openings = 40                # Played twice with colors swapped
+promotion_num_openings = 80                # 160 games after color swapping
 promotion_threshold = 0.55                 # Draws count as half a win
-promotion_require_confidence = True        # Require CI lower bound > 50%
+promotion_require_confidence = False       # Optional stricter CI gate
 ```
 
 ## Development

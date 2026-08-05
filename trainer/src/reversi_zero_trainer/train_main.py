@@ -81,14 +81,14 @@ class RunConfig:
     reference_games: int = 40
 
     promotion_enabled: bool = True
-    promotion_num_openings: int = 40
+    promotion_num_openings: int = 80
     promotion_opening_plies: int = 8
     promotion_seed: int = 0
     promotion_mcts_sims: int | None = None
     promotion_c_puct: float = 1.5
     promotion_expansion_batch_size: int | None = None
     promotion_threshold: float = 0.55
-    promotion_require_confidence: bool = True
+    promotion_require_confidence: bool = False
 
     model_type: Literal["dummy", "resnet"] = "dummy"
     model_channels: int = 64
