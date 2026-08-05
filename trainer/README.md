@@ -9,7 +9,8 @@ make doctor
 
 The setup builds `reversi-zero-rs` against the PyTorch installation in this
 directory's `.venv`. Prefer `make init` over a standalone `uv sync` when
-rebuilding the environment or the Rust extension.
+rebuilding the environment or the Rust extension. `make doctor` verifies that
+Python and Rust agree on both CUDA build support and runtime availability.
 
 Run training from this directory:
 

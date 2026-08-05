@@ -14,7 +14,7 @@ doctor:
 	rustc --version
 	cargo --version
 	trainer/.venv/bin/python --version
-	./scripts/with-torch-env trainer/.venv/bin/python -c 'import torch, reversi_zero_rs; print(f"torch {torch.__version__}"); print(f"reversi_zero_rs {reversi_zero_rs.__file__}")'
+	./scripts/with-torch-env trainer/.venv/bin/python trainer/scripts/doctor.py
 
 # Build Rust components against the PyTorch installed in trainer/.venv.
 build-rust:

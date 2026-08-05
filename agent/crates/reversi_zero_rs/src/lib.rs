@@ -12,7 +12,7 @@ use reversi_selfplay::{
     GameRecord, GameResult, game_to_training_examples, play_game,
     storage::append_training_data_to_dir,
 };
-use tch::Device;
+use tch::{Cuda, Device};
 
 #[pyclass]
 #[derive(Debug, Clone, Default)]
@@ -133,16 +133,7 @@ impl MctsPlayer {
         device: Option<String>,
         mcts: Option<MctsConfigArgs>,
     ) -> PyResult<Self> {
-        let device = match device.as_deref().map(|s| s.to_ascii_lowercase()) {
-            Some(ref d) if d == "cpu" => Device::Cpu,
-            Some(ref d) if d == "cuda" || d == "gpu" => Device::cuda_if_available(),
-            Some(other) => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "Unknown device '{other}', expected 'cpu' or 'cuda'"
-                )));
-            }
-            None => Device::cuda_if_available(),
-        };
+        let device = resolve_device(device.as_deref())?;
 
         let config = build_eval_mcts_config(mcts)?;
 
@@ -231,11 +222,7 @@ impl SelfPlayStream {
         }
 
         let model_path = model_path.unwrap_or_else(|| "../models/ts/latest.pt".to_string());
-        let device = match device.as_deref() {
-            Some("cpu") => Device::Cpu,
-            Some("cuda") | Some("gpu") => Device::cuda_if_available(),
-            _ => Device::cuda_if_available(),
-        };
+        let device = resolve_device(device.as_deref())?;
 
         let report_interval = report_interval.max(1);
         let batch = batch.unwrap_or_default();
@@ -472,6 +459,16 @@ impl SelfPlayStream {
     }
 }
 
+#[pyfunction]
+fn cuda_available() -> bool {
+    Cuda::is_available()
+}
+
+#[pyfunction]
+fn cuda_built() -> bool {
+    option_env!("REVERSI_ZERO_CUDA_LINKED") == Some("1")
+}
+
 #[pymodule]
 fn reversi_zero_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<BatchConfigArgs>()?;
@@ -479,7 +476,38 @@ fn reversi_zero_rs(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<SelfPlayStream>()?;
     m.add_class::<SelfPlayStats>()?;
     m.add_class::<MctsPlayer>()?;
+    m.add_function(wrap_pyfunction!(cuda_available, m)?)?;
+    m.add_function(wrap_pyfunction!(cuda_built, m)?)?;
     Ok(())
+}
+
+fn resolve_device(requested: Option<&str>) -> PyResult<Device> {
+    resolve_device_with_cuda(requested, Cuda::is_available()).map_err(|message| {
+        if message.starts_with("Unknown device") {
+            pyo3::exceptions::PyValueError::new_err(message)
+        } else {
+            pyo3::exceptions::PyRuntimeError::new_err(message)
+        }
+    })
+}
+
+fn resolve_device_with_cuda(
+    requested: Option<&str>,
+    cuda_available: bool,
+) -> Result<Device, String> {
+    match requested.map(str::to_ascii_lowercase).as_deref() {
+        Some("cpu") => Ok(Device::Cpu),
+        Some("cuda" | "gpu") if cuda_available => Ok(Device::Cuda(0)),
+        Some("cuda" | "gpu") => Err(
+            "CUDA was requested, but the Rust/libtorch runtime cannot use it; run `make init` and `make doctor` in the target environment"
+                .to_string(),
+        ),
+        Some(other) => Err(format!(
+            "Unknown device '{other}', expected 'cpu' or 'cuda'"
+        )),
+        None if cuda_available => Ok(Device::Cuda(0)),
+        None => Ok(Device::Cpu),
+    }
 }
 
 fn default_game_concurrency(report_interval: u32) -> u32 {
@@ -579,5 +607,30 @@ mod tests {
         let config = build_eval_mcts_config(None).unwrap();
 
         assert_eq!(config.batch_size, 1);
+    }
+
+    #[test]
+    fn explicit_cuda_does_not_fall_back_to_cpu() {
+        let error = resolve_device_with_cuda(Some("cuda"), false).unwrap_err();
+
+        assert!(error.starts_with("CUDA was requested"));
+    }
+
+    #[test]
+    fn automatic_device_selection_can_fall_back_to_cpu() {
+        assert_eq!(resolve_device_with_cuda(None, false).unwrap(), Device::Cpu);
+        assert_eq!(
+            resolve_device_with_cuda(None, true).unwrap(),
+            Device::Cuda(0)
+        );
+    }
+
+    #[test]
+    fn device_selection_is_case_insensitive_and_rejects_unknown_values() {
+        assert_eq!(
+            resolve_device_with_cuda(Some("CUDA"), true).unwrap(),
+            Device::Cuda(0)
+        );
+        assert!(resolve_device_with_cuda(Some("metal"), true).is_err());
     }
 }

@@ -57,13 +57,19 @@ make init
 `make init` is the canonical setup command. It installs Python dependencies
 first, then builds the PyO3 extension against the PyTorch installation in
 `trainer/.venv`. This avoids recording an ephemeral `uv` build-environment
-path in Cargo's `torch-sys` artifacts.
+path in Cargo's `torch-sys` artifacts. On Linux, when that PyTorch installation
+includes CUDA, the extension also retains the CUDA libtorch backend instead of
+silently building a CPU-only bridge.
 
 Verify the active toolchain and Python/Rust bridge at any time:
 
 ```bash
 make doctor
 ```
+
+The doctor compares CUDA support and runtime availability in both Python and
+the Rust extension. A mismatch is an error; an explicit `--device cuda` also
+fails rather than silently falling back to CPU.
 
 No `.envrc` is required. For a direct Cargo command that links to PyTorch, use
 the environment wrapper:
