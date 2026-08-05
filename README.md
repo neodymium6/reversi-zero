@@ -164,7 +164,9 @@ benchmarking a dedicated host; CUDA evaluation keeps Torch's normal defaults.
 The challenger is marked statistically stronger when its score reaches the
 promotion threshold (55% by default) and the confidence interval lower bound
 is above 50%. Random and Alpha-Beta references are also available via
-`--reference-random` and `--reference-alphabeta`.
+`--reference-random` and `--reference-alphabeta`. A native Rust Alpha-Beta
+opponent using the six-mask `BitMatrixEvaluator` is available via
+`--reference-bitmatrix`; control its search depth with `--bitmatrix-depth`.
 
 To isolate MCTS expansion batching with the same model and search budget, pass
 `--challenger-expansion-batch-size` and
@@ -191,6 +193,7 @@ To isolate MCTS expansion batching with the same model and search budget, pass
 
 Tests trained models against baseline opponents:
 - **Alpha-Beta** - Traditional minimax search
+- **BitMatrix Alpha-Beta** - Native Rust search with a weighted six-mask evaluator
 - **Random** - Random move selection
 - **Temperature control** - Adds diversity to deterministic opponents
 

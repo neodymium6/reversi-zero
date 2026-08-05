@@ -86,6 +86,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     reference = parser.add_mutually_exclusive_group(required=True)
     reference.add_argument("--reference-model", type=Path)
     reference.add_argument("--reference-alphabeta", action="store_true")
+    reference.add_argument("--reference-bitmatrix", action="store_true")
     reference.add_argument("--reference-random", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true")
@@ -105,6 +106,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--challenger-expansion-batch-size", type=int, default=1)
     parser.add_argument("--reference-expansion-batch-size", type=int, default=1)
     parser.add_argument("--alphabeta-depth", type=int, default=3)
+    parser.add_argument("--bitmatrix-depth", type=int, default=3)
     parser.add_argument("--promotion-threshold", type=float, default=0.55)
     parser.add_argument(
         "--show-progress", action=argparse.BooleanOptionalAction, default=True
@@ -125,6 +127,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--reference-expansion-batch-size must be positive")
     if args.alphabeta_depth <= 0:
         parser.error("--alphabeta-depth must be positive")
+    if args.bitmatrix_depth <= 0:
+        parser.error("--bitmatrix-depth must be positive")
     if not 0.0 <= args.promotion_threshold <= 1.0:
         parser.error("--promotion-threshold must be between 0 and 1")
     return args
@@ -194,6 +198,11 @@ def _reference_command(
             ],
             {"type": "alphabeta", "depth": args.alphabeta_depth},
         )
+    if args.reference_bitmatrix:
+        return (
+            _bitmatrix_command(openings_path, args.bitmatrix_depth),
+            {"type": "bitmatrix", "depth": args.bitmatrix_depth},
+        )
     return (
         [
             sys.executable,
@@ -205,6 +214,22 @@ def _reference_command(
         ],
         {"type": "random", "seed": args.seed},
     )
+
+
+def _bitmatrix_command(openings_path: Path, depth: int) -> list[str]:
+    repo_root = Path(__file__).resolve().parents[3]
+    player = repo_root / "agent" / "target" / "release" / "reversi-bitmatrix-player"
+    if not player.is_file():
+        raise FileNotFoundError(
+            f"BitMatrix player not built: {player}. Run `make build-arena-players`."
+        )
+    return [
+        str(player),
+        "--depth",
+        str(depth),
+        "--openings-file",
+        str(openings_path),
+    ]
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:

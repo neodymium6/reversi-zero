@@ -1059,6 +1059,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "reversi-bitmatrix-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rust_reversi_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reversi-core"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,7 @@
 import pytest
 
 from reversi_zero_trainer.evaluate_main import (
+    _bitmatrix_command,
     _mcts_command,
     opening_suite_sha256,
     parse_args,
@@ -66,6 +67,41 @@ def test_cuda_mcts_command_does_not_override_torch_threads(tmp_path):
     )
 
     assert "--torch-threads" not in command
+
+
+def test_bitmatrix_command_uses_native_player(monkeypatch, tmp_path):
+    module_file = tmp_path / "trainer/src/reversi_zero_trainer/evaluate_main.py"
+    player = tmp_path / "agent/target/release/reversi-bitmatrix-player"
+    player.parent.mkdir(parents=True)
+    player.touch()
+    monkeypatch.setattr("reversi_zero_trainer.evaluate_main.__file__", str(module_file))
+
+    command = _bitmatrix_command(tmp_path / "openings.json", depth=5)
+
+    assert command == [
+        str(player),
+        "--depth",
+        "5",
+        "--openings-file",
+        str(tmp_path / "openings.json"),
+    ]
+
+
+def test_evaluation_accepts_bitmatrix_reference(tmp_path):
+    args = parse_args(
+        [
+            "--challenger",
+            str(tmp_path / "model.pt"),
+            "--reference-bitmatrix",
+            "--bitmatrix-depth",
+            "5",
+            "--output",
+            str(tmp_path / "report.json"),
+        ]
+    )
+
+    assert args.reference_bitmatrix is True
+    assert args.bitmatrix_depth == 5
 
 
 def test_evaluation_rejects_non_positive_torch_threads(tmp_path):

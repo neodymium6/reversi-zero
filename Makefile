@@ -1,9 +1,10 @@
-.PHONY: init doctor build-rust check lint format test clean
+.PHONY: init doctor build-rust build-arena-players check lint format test clean
 
 # Initialize development environment
 init:
 	cd trainer && uv sync --locked --dev --no-install-package reversi-zero-rs
 	./scripts/with-torch-env uv sync --project trainer --locked --dev --no-build-isolation-package reversi-zero-rs --reinstall-package reversi-zero-rs
+	$(MAKE) build-arena-players
 	cd trainer && uv run --no-sync pre-commit install
 	cd trainer && uv run --no-sync pre-commit install --hook-type commit-msg
 	$(MAKE) doctor
@@ -19,6 +20,10 @@ doctor:
 # Build Rust components against the PyTorch installed in trainer/.venv.
 build-rust:
 	./scripts/with-torch-env cargo build --manifest-path agent/Cargo.toml --release
+
+# Build lightweight native opponents used by Arena evaluation.
+build-arena-players:
+	cargo build --manifest-path agent/Cargo.toml --release -p reversi-bitmatrix-player
 
 # Run all pre-commit checks
 check:

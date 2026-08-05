@@ -245,6 +245,7 @@ def evaluate_promotion_candidate(
         challenger=candidate_path,
         reference_model=incumbent_path,
         reference_alphabeta=False,
+        reference_bitmatrix=False,
         reference_random=False,
         output=report_path,
         overwrite=False,
@@ -263,6 +264,7 @@ def evaluate_promotion_candidate(
             config.resolved_promotion_expansion_batch_size()
         ),
         alphabeta_depth=3,
+        bitmatrix_depth=3,
         promotion_threshold=config.promotion_threshold,
         show_progress=False,
     )
