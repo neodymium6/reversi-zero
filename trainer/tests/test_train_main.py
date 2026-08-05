@@ -45,6 +45,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["selfplay_batch_size"] == 32
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
     assert stored["train_num_workers"] == 0
+    assert stored["train_num_epochs"] == 1
     assert stored["train_symmetry_augmentation"] == 8
     assert stored["train_replay_window"] == 5
     assert stored["reference_eval_enabled"] is True
@@ -140,6 +141,10 @@ def test_hydra_config_maps_training_options():
     assert config.inference_dtype == "float16"
     assert not config.reference_eval_enabled
     assert config.reference_games == 20
+
+
+def test_hydra_training_epochs_default_to_one():
+    assert compose_run_config([]).train_num_epochs == 1
 
 
 @pytest.mark.parametrize(

@@ -65,7 +65,7 @@ class SelfPlaySettings:
 class TrainingSettings:
     batch_size: int = 256
     num_workers: int | None = None
-    epochs: int = 10
+    epochs: int = 1
     replay_window: int = 5
     symmetry_augmentation: SymmetryAugmentation = SymmetryAugmentation.eight
     learning_rate: float = 0.001

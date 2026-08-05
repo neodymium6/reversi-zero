@@ -69,7 +69,7 @@ class RunConfig:
 
     train_batch_size: int = 256
     train_num_workers: int | None = None
-    train_num_epochs: int = 10
+    train_num_epochs: int = 1
     train_replay_window: int = 5
     train_symmetry_augmentation: Literal[1, 2, 4, 8] = 8
     train_learning_rate: float = 0.001

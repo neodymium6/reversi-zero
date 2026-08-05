@@ -89,7 +89,7 @@ the environment wrapper:
 This creates a new timestamped directory under `trainer/runs/` and runs the
 full AlphaZero training loop (10 iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 128)
-2. **Neural network training** - 10 epochs per iteration
+2. **Neural network training** - 1 epoch per iteration
 3. **Candidate promotion** - Replace the incumbent only after a paired direct match
 4. **Reference evaluation** - Test the selected incumbent against BitMatrix
 
@@ -225,7 +225,7 @@ selfplay_expansion_batch_size = 4          # Validated expansion batch size
 seed = 0                                    # PyTorch initialization/shuffle seed
 batch_size = 256                           # Training batch size
 num_workers = 0                            # CPU default; 4 on CUDA
-num_epochs = 10                            # Epochs per iteration
+num_epochs = 1                             # Epochs per iteration
 replay_window = 5                          # Recent self-play iterations to combine
 symmetry_augmentation = 8                  # Lazy D4 multiplier; eval stays unaugmented
 learning_rate = 0.001                      # Adam learning rate
