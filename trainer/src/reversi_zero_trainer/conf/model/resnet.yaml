@@ -1,0 +1,6 @@
+# @package _global_
+
+model:
+  type: resnet
+  channels: 64
+  blocks: 6

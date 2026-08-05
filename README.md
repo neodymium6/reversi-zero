@@ -68,7 +68,7 @@ make doctor
 ```
 
 The doctor compares CUDA support and runtime availability in both Python and
-the Rust extension. A mismatch is an error; an explicit `--device cuda` also
+the Rust extension. A mismatch is an error; an explicit `profile=gpu` also
 fails rather than silently falling back to CPU.
 
 No `.envrc` is required. For a direct Cargo command that links to PyTorch, use
@@ -97,18 +97,19 @@ full AlphaZero training loop (10 iterations by default):
 Existing run directories are never reused implicitly. To select a stable name:
 
 ```bash
-./scripts/train --run-dir runs/experiment-001
+./scripts/train run.dir=runs/experiment-001
 ```
 
 Resume starts after the latest complete checkpoint/model pair. It refuses to
 continue if the next iteration contains ambiguous partial self-play data:
 
 ```bash
-./scripts/train --run-dir runs/experiment-001 --resume
+./scripts/train run.dir=runs/experiment-001 run.resume=true
 ```
 
-Use `./scripts/train --help` to configure game counts, MCTS, training,
-reference evaluation, device, and model architecture without editing source code.
+Training uses Hydra configuration groups and overrides. Use
+`./scripts/train --help` to inspect the configuration and `profile=gpu` or
+`model=resnet` to select common hardware and model settings.
 
 ### Training Output
 

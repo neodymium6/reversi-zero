@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import argparse
 import copy
 import json
 import math
 import os
 import re
 import shutil
+from argparse import Namespace
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+import hydra
 import torch
+from omegaconf import DictConfig
 from reversi_zero_rs import BatchConfigArgs, MctsConfigArgs, SelfPlayStream
 
 from reversi_zero_trainer.logging import (
@@ -240,7 +242,7 @@ def evaluate_promotion_candidate(
     torch_threads: int | None,
 ) -> dict[str, Any]:
     """Evaluate a candidate against the incumbent and persist the report."""
-    args = argparse.Namespace(
+    args = Namespace(
         challenger=candidate_path,
         reference_model=incumbent_path,
         reference_alphabeta=False,
@@ -293,7 +295,7 @@ def evaluate_reference_opponents(
     opening_source: Path | None = None
     for opponent in ("random", "alphabeta", "bitmatrix"):
         report_path = evaluations_dir / f"reference_{opponent}_iter_{iteration}.json"
-        args = argparse.Namespace(
+        args = Namespace(
             challenger=model_path,
             reference_model=None,
             reference_alphabeta=opponent == "alphabeta",
@@ -483,14 +485,14 @@ def prepare_run(config: RunConfig) -> RunState:
         if run_dir.exists():
             raise FileExistsError(
                 f"Run directory already exists: {run_dir}. "
-                "Choose another --run-dir or use --resume."
+                "Choose another run.dir or use run.resume=true."
             )
         run_dir.mkdir(parents=True)
         _write_run_config(config, run_dir)
         return RunState(run_dir, 0, None)
 
     if config.run_dir is None:
-        raise ValueError("--resume requires an explicit --run-dir")
+        raise ValueError("run.resume=true requires an explicit run.dir")
     if not run_dir.is_dir():
         raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
 
@@ -564,166 +566,62 @@ def export_model_to_torchscript(
         next_path.unlink(missing_ok=True)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train Reversi Zero safely")
-    parser.add_argument("--run-dir", type=Path)
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--num-iterations", type=int, default=10)
-    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="PyTorch seed for model initialization and training shuffles",
-    )
-    parser.add_argument(
-        "--torch-threads",
-        type=int,
-        help="Torch CPU threads for self-play and training (default: 4 on CPU)",
-    )
-
-    parser.add_argument("--games-per-iteration", type=int, default=128)
-    parser.add_argument("--report-interval", type=int)
-    parser.add_argument(
-        "--selfplay-batch-size",
-        type=int,
-        help="NN inference batch size (default: 32 on CPU, 128 on CUDA)",
-    )
-    parser.add_argument(
-        "--game-concurrency",
-        type=int,
-        help="Parallel games (default: up to 16 on CPU, 32 on CUDA)",
-    )
-    parser.add_argument("--batch-timeout-ms", type=int, default=1)
-    parser.add_argument("--simulations", type=int, default=100)
-    parser.add_argument("--expansion-batch-size", type=int, default=4)
-    parser.add_argument("--c-puct", type=float, default=3.0)
-    parser.add_argument(
-        "--inference-dtype",
-        choices=["auto", "float32", "float16"],
-        default="auto",
-        help="TorchScript self-play precision (default: float16 on CUDA, float32 on CPU)",
-    )
-
-    parser.add_argument("--train-batch-size", type=int, default=256)
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        help="DataLoader workers (default: 0 on CPU, 4 on CUDA)",
-    )
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument(
-        "--replay-window",
-        type=int,
-        default=5,
-        help="Number of recent self-play iterations used for training",
-    )
-    parser.add_argument(
-        "--symmetry-augmentation",
-        type=int,
-        choices=[1, 2, 4, 8],
-        default=8,
-        help="Lazy D4 training-example multiplier (evaluation remains unaugmented)",
-    )
-    parser.add_argument("--learning-rate", type=float, default=0.001)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--policy-loss-weight", type=float, default=1.0)
-    parser.add_argument("--value-loss-weight", type=float, default=1.0)
-
-    parser.add_argument(
-        "--reference-eval",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Evaluate each selected incumbent against all fixed references",
-    )
-    parser.add_argument(
-        "--reference-games",
-        type=int,
-        default=40,
-        help="Total games per reference, split evenly across colors",
-    )
-
-    parser.add_argument(
-        "--promotion",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Require candidate-vs-incumbent evaluation before model promotion",
-    )
-    parser.add_argument("--promotion-openings", type=int, default=40)
-    parser.add_argument("--promotion-opening-plies", type=int, default=8)
-    parser.add_argument("--promotion-seed", type=int, default=0)
-    parser.add_argument(
-        "--promotion-simulations",
-        type=int,
-        help="MCTS simulations for promotion (default: self-play simulations)",
-    )
-    parser.add_argument("--promotion-c-puct", type=float, default=1.5)
-    parser.add_argument(
-        "--promotion-expansion-batch-size",
-        type=int,
-        help="MCTS expansion batch size for promotion (default: self-play setting)",
-    )
-    parser.add_argument("--promotion-threshold", type=float, default=0.55)
-    parser.add_argument(
-        "--promotion-require-confidence",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Also require the 95%% score interval lower bound to exceed 50%%",
-    )
-
-    parser.add_argument("--model", choices=["dummy", "resnet"], default="dummy")
-    parser.add_argument("--model-channels", type=int, default=64)
-    parser.add_argument("--model-blocks", type=int, default=6)
-    return parser
-
-
-def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
-    args = _build_parser().parse_args(argv)
+def run_config_from_hydra(config: DictConfig) -> RunConfig:
+    """Convert Hydra's nested application config into the training domain config."""
     return RunConfig(
-        run_dir=args.run_dir,
-        resume=args.resume,
-        num_iterations=args.num_iterations,
-        device=args.device,
-        seed=args.seed,
-        torch_threads=args.torch_threads,
-        selfplay_games_per_iter=args.games_per_iteration,
-        selfplay_report_interval=args.report_interval,
-        selfplay_batch_size=args.selfplay_batch_size,
-        selfplay_game_concurrency=args.game_concurrency,
-        selfplay_batch_timeout_ms=args.batch_timeout_ms,
-        selfplay_num_simulations=args.simulations,
-        selfplay_expansion_batch_size=args.expansion_batch_size,
-        selfplay_c_puct=args.c_puct,
-        inference_dtype=args.inference_dtype,
-        train_batch_size=args.train_batch_size,
-        train_num_workers=args.num_workers,
-        train_num_epochs=args.epochs,
-        train_replay_window=args.replay_window,
-        train_symmetry_augmentation=args.symmetry_augmentation,
-        train_learning_rate=args.learning_rate,
-        train_weight_decay=args.weight_decay,
-        policy_loss_weight=args.policy_loss_weight,
-        value_loss_weight=args.value_loss_weight,
-        reference_eval_enabled=args.reference_eval,
-        reference_games=args.reference_games,
-        promotion_enabled=args.promotion,
-        promotion_num_openings=args.promotion_openings,
-        promotion_opening_plies=args.promotion_opening_plies,
-        promotion_seed=args.promotion_seed,
-        promotion_mcts_sims=args.promotion_simulations,
-        promotion_c_puct=args.promotion_c_puct,
-        promotion_expansion_batch_size=args.promotion_expansion_batch_size,
-        promotion_threshold=args.promotion_threshold,
-        promotion_require_confidence=args.promotion_require_confidence,
-        model_type=args.model,
-        model_channels=args.model_channels,
-        model_num_blocks=args.model_blocks,
+        run_dir=Path(config.run.dir) if config.run.dir is not None else None,
+        resume=config.run.resume,
+        num_iterations=config.run.num_iterations,
+        device=config.hardware.device,
+        seed=config.run.seed,
+        torch_threads=config.hardware.torch_threads,
+        selfplay_games_per_iter=config.selfplay.games_per_iteration,
+        selfplay_report_interval=config.selfplay.report_interval,
+        selfplay_batch_size=config.selfplay.batch_size,
+        selfplay_game_concurrency=config.selfplay.game_concurrency,
+        selfplay_batch_timeout_ms=config.selfplay.batch_timeout_ms,
+        selfplay_num_simulations=config.selfplay.simulations,
+        selfplay_expansion_batch_size=config.selfplay.expansion_batch_size,
+        selfplay_c_puct=config.selfplay.c_puct,
+        inference_dtype=config.hardware.inference_dtype,
+        train_batch_size=config.training.batch_size,
+        train_num_workers=config.training.num_workers,
+        train_num_epochs=config.training.epochs,
+        train_replay_window=config.training.replay_window,
+        train_symmetry_augmentation=config.training.symmetry_augmentation,
+        train_learning_rate=config.training.learning_rate,
+        train_weight_decay=config.training.weight_decay,
+        policy_loss_weight=config.training.policy_loss_weight,
+        value_loss_weight=config.training.value_loss_weight,
+        reference_eval_enabled=config.reference.enabled,
+        reference_games=config.reference.games,
+        promotion_enabled=config.promotion.enabled,
+        promotion_num_openings=config.promotion.openings,
+        promotion_opening_plies=config.promotion.opening_plies,
+        promotion_seed=config.promotion.seed,
+        promotion_mcts_sims=config.promotion.simulations,
+        promotion_c_puct=config.promotion.c_puct,
+        promotion_expansion_batch_size=config.promotion.expansion_batch_size,
+        promotion_threshold=config.promotion.threshold,
+        promotion_require_confidence=config.promotion.require_confidence,
+        model_type=config.model.type,
+        model_channels=config.model.channels,
+        model_num_blocks=config.model.blocks,
     )
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def compose_run_config(overrides: Sequence[str] = ()) -> RunConfig:
+    """Compose a training config for tests and programmatic callers."""
+    config_dir = Path(__file__).parent / "conf"
+    with hydra.initialize_config_dir(
+        version_base="1.3", config_dir=str(config_dir.resolve())
+    ):
+        config = hydra.compose(config_name="train", overrides=list(overrides))
+    return run_config_from_hydra(config)
+
+
+def run_training(config: RunConfig) -> None:
     """Run the configured AlphaZero training loop."""
-    config = parse_args(argv)
     device = config.resolved_device()
     inference_dtype = config.resolved_inference_dtype(device)
     torch_threads = config.resolved_torch_threads(device)
@@ -997,6 +895,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             inference_dtype=inference_dtype,
         )
         logger.log_artifact("final model", str(final_model_path))
+
+
+@hydra.main(version_base="1.3", config_path="conf", config_name="train")
+def main(config: DictConfig) -> None:
+    """Compose the Hydra configuration and start training."""
+    run_training(run_config_from_hydra(config))
 
 
 if __name__ == "__main__":

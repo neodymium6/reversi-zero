@@ -12,11 +12,11 @@ from reversi_zero_trainer.train_main import (
     RunConfig,
     _Float16InferenceWrapper,
     capture_trainer_snapshot,
+    compose_run_config,
     default_run_dir,
     evaluate_promotion_candidate,
     evaluate_reference_opponents,
     finalize_candidate,
-    parse_args,
     prepare_run,
     promotion_is_accepted,
     replay_data_paths,
@@ -99,41 +99,26 @@ def test_prepare_run_refuses_ambiguous_partial_iteration(tmp_path):
         )
 
 
-def test_parse_args_maps_training_options():
-    config = parse_args(
+def test_hydra_config_maps_training_options():
+    config = compose_run_config(
         [
-            "--run-dir",
-            "example-run",
-            "--num-iterations",
-            "2",
-            "--seed",
-            "123",
-            "--games-per-iteration",
-            "16",
-            "--epochs",
-            "3",
-            "--symmetry-augmentation",
-            "4",
-            "--replay-window",
-            "7",
-            "--promotion-openings",
-            "12",
-            "--promotion-opening-plies",
-            "6",
-            "--promotion-simulations",
-            "50",
-            "--promotion-expansion-batch-size",
-            "2",
-            "--promotion-threshold",
-            "0.6",
-            "--promotion-require-confidence",
-            "--model",
-            "resnet",
-            "--inference-dtype",
-            "float16",
-            "--no-reference-eval",
-            "--reference-games",
-            "20",
+            "run.dir=example-run",
+            "run.num_iterations=2",
+            "run.seed=123",
+            "selfplay.games_per_iteration=16",
+            "training.epochs=3",
+            "training.symmetry_augmentation=4",
+            "training.replay_window=7",
+            "promotion.openings=12",
+            "promotion.opening_plies=6",
+            "promotion.simulations=50",
+            "promotion.expansion_batch_size=2",
+            "promotion.threshold=0.6",
+            "promotion.require_confidence=true",
+            "model=resnet",
+            "hardware.inference_dtype=float16",
+            "reference.enabled=false",
+            "reference.games=20",
         ]
     )
 
@@ -154,6 +139,16 @@ def test_parse_args_maps_training_options():
     assert config.inference_dtype == "float16"
     assert not config.reference_eval_enabled
     assert config.reference_games == 20
+
+
+@pytest.mark.parametrize(
+    ("profile", "device"),
+    [("auto", "auto"), ("cpu", "cpu"), ("gpu", "cuda")],
+)
+def test_hydra_profile_selects_device(profile, device):
+    config = compose_run_config([f"profile={profile}"])
+
+    assert config.device == device
 
 
 def test_run_config_rejects_invalid_symmetry_augmentation():
