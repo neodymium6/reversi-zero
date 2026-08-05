@@ -60,6 +60,7 @@ class RunConfig:
     train_batch_size: int = 256
     train_num_workers: int | None = None
     train_num_epochs: int = 10
+    train_replay_window: int = 5
     train_symmetry_augmentation: Literal[1, 2, 4, 8] = 8
     train_learning_rate: float = 0.001
     train_weight_decay: float = 1e-4
@@ -148,6 +149,7 @@ class RunConfig:
             "selfplay_expansion_batch_size": self.selfplay_expansion_batch_size,
             "train_batch_size": self.train_batch_size,
             "train_num_epochs": self.train_num_epochs,
+            "train_replay_window": self.train_replay_window,
             "arena_games": self.arena_games,
             "arena_mcts_sims": self.arena_mcts_sims,
             "promotion_num_openings": self.promotion_num_openings,
@@ -287,6 +289,21 @@ def _copy_file_atomically(source: Path, destination: Path) -> None:
         next_path.replace(destination)
     finally:
         next_path.unlink(missing_ok=True)
+
+
+def replay_data_paths(
+    data_base_dir: Path, iteration: int, replay_window: int
+) -> list[Path]:
+    """Return the available rolling window ending at the current iteration."""
+    first_iteration = max(0, iteration - replay_window + 1)
+    paths = [
+        data_base_dir / f"selfplay_iter_{index}"
+        for index in range(first_iteration, iteration + 1)
+    ]
+    missing = [path for path in paths if not path.is_dir()]
+    if missing:
+        raise FileNotFoundError(f"Replay data directory not found: {missing[0]}")
+    return paths
 
 
 def finalize_candidate(
@@ -551,6 +568,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument(
+        "--replay-window",
+        type=int,
+        default=5,
+        help="Number of recent self-play iterations used for training",
+    )
+    parser.add_argument(
         "--symmetry-augmentation",
         type=int,
         choices=[1, 2, 4, 8],
@@ -623,6 +646,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         train_batch_size=args.train_batch_size,
         train_num_workers=args.num_workers,
         train_num_epochs=args.epochs,
+        train_replay_window=args.replay_window,
         train_symmetry_augmentation=args.symmetry_augmentation,
         train_learning_rate=args.learning_rate,
         train_weight_decay=args.weight_decay,
@@ -731,6 +755,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             logger=logger,
             num_iterations=config.num_iterations,
             seed=config.seed,
+            replay_window=config.train_replay_window,
             selfplay_config={
                 "games_per_iter": config.selfplay_games_per_iter,
                 "report_interval": config.report_interval(),
@@ -819,7 +844,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                 capture_trainer_snapshot(trainer) if config.promotion_enabled else None
             )
             for epoch_metrics in trainer.train(
-                data_path=selfplay_data_dir,
+                data_path=replay_data_paths(
+                    data_base_dir,
+                    iteration,
+                    config.train_replay_window,
+                ),
                 num_epochs=train_config.num_epochs,
             ):
                 log_training_metrics(logger, epoch_metrics, iteration, global_step)

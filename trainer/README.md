@@ -55,6 +55,10 @@ example by default. The NPY files are not duplicated, and evaluation uses the
 original examples only. Use `--symmetry-augmentation 1`, `2`, `4`, or `8` to
 control the training-example multiplier.
 
+Training also uses a rolling window of the five most recent self-play
+iterations by default. Their datasets are lazily concatenated without creating
+merged NPY files. Use `--replay-window N` to change the history length.
+
 Use `--seed N` to give comparison runs identical PyTorch model initialization
 and training-shuffle seeds. Rust self-play remains stochastic.
 

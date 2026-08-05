@@ -18,6 +18,7 @@ from reversi_zero_trainer.train_main import (
     parse_args,
     prepare_run,
     promotion_is_accepted,
+    replay_data_paths,
 )
 from reversi_zero_trainer.models.dummy import DummyReversiNet
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
@@ -43,6 +44,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
     assert stored["train_num_workers"] == 0
     assert stored["train_symmetry_augmentation"] == 8
+    assert stored["train_replay_window"] == 5
     assert stored["promotion_enabled"] is True
     assert stored["promotion_num_openings"] == 40
     assert stored["promotion_mcts_sims"] == 100
@@ -109,6 +111,8 @@ def test_parse_args_maps_training_options():
             "3",
             "--symmetry-augmentation",
             "4",
+            "--replay-window",
+            "7",
             "--promotion-openings",
             "12",
             "--promotion-opening-plies",
@@ -134,6 +138,7 @@ def test_parse_args_maps_training_options():
     assert config.selfplay_games_per_iter == 16
     assert config.train_num_epochs == 3
     assert config.train_symmetry_augmentation == 4
+    assert config.train_replay_window == 7
     assert config.promotion_num_openings == 12
     assert config.promotion_opening_plies == 6
     assert config.resolved_promotion_mcts_sims() == 50
@@ -152,6 +157,28 @@ def test_run_config_rejects_invalid_symmetry_augmentation():
         config.validate()
 
 
+def test_replay_data_paths_selects_recent_complete_window(tmp_path):
+    for iteration in range(6):
+        (tmp_path / f"selfplay_iter_{iteration}").mkdir()
+
+    assert replay_data_paths(tmp_path, iteration=5, replay_window=3) == [
+        tmp_path / "selfplay_iter_3",
+        tmp_path / "selfplay_iter_4",
+        tmp_path / "selfplay_iter_5",
+    ]
+    assert replay_data_paths(tmp_path, iteration=1, replay_window=5) == [
+        tmp_path / "selfplay_iter_0",
+        tmp_path / "selfplay_iter_1",
+    ]
+
+
+def test_replay_data_paths_rejects_missing_iteration(tmp_path):
+    (tmp_path / "selfplay_iter_0").mkdir()
+
+    with pytest.raises(FileNotFoundError, match="selfplay_iter_1"):
+        replay_data_paths(tmp_path, iteration=1, replay_window=2)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -161,6 +188,7 @@ def test_run_config_rejects_invalid_symmetry_augmentation():
         ({"promotion_expansion_batch_size": 0}, "must be > 0"),
         ({"promotion_c_puct": 0.0}, "must be > 0"),
         ({"promotion_threshold": 1.1}, "between 0 and 1"),
+        ({"train_replay_window": 0}, "must be > 0"),
     ],
 )
 def test_run_config_rejects_invalid_promotion_settings(kwargs, message):

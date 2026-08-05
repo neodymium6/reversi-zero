@@ -221,6 +221,7 @@ seed = 0                                    # PyTorch initialization/shuffle see
 batch_size = 256                           # Training batch size
 num_workers = 0                            # CPU default; 4 on CUDA
 num_epochs = 10                            # Epochs per iteration
+replay_window = 5                          # Recent self-play iterations to combine
 symmetry_augmentation = 8                  # Lazy D4 multiplier; eval stays unaugmented
 learning_rate = 0.001                      # Adam learning rate
 weight_decay = 1e-4                        # L2 regularization

@@ -2,6 +2,8 @@
 Training data loading utilities for AlphaZero self-play data.
 """
 
+from bisect import bisect_right
+from itertools import accumulate
 from pathlib import Path
 from typing import Literal
 
@@ -103,12 +105,66 @@ class SelfPlayDataset(Dataset):
         }
 
 
+class ReplayBufferDataset(Dataset):
+    """Lazily concatenate self-play datasets from multiple iterations."""
+
+    def __init__(self, data_dirs: list[Path | str]) -> None:
+        if not data_dirs:
+            raise ValueError("Replay buffer requires at least one data directory")
+        self.datasets = [SelfPlayDataset(data_dir) for data_dir in data_dirs]
+        if any(len(dataset) == 0 for dataset in self.datasets):
+            raise ValueError("Replay buffer datasets must not be empty")
+        self.cumulative_sizes = list(
+            accumulate(len(dataset) for dataset in self.datasets)
+        )
+
+    def __len__(self) -> int:
+        return self.cumulative_sizes[-1]
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if idx < 0:
+            idx += len(self)
+        if idx < 0 or idx >= len(self):
+            raise IndexError(idx)
+
+        dataset_idx = bisect_right(self.cumulative_sizes, idx)
+        previous_size = self.cumulative_sizes[dataset_idx - 1] if dataset_idx else 0
+        return self.datasets[dataset_idx][idx - previous_size]
+
+    def get_stats(self) -> dict[str, float]:
+        """Aggregate statistics without concatenating the underlying arrays."""
+        num_samples = len(self)
+        value_sum = sum(
+            float(dataset.values.sum(dtype=np.float64)) for dataset in self.datasets
+        )
+        value_squared_sum = sum(
+            float(np.square(dataset.values, dtype=np.float64).sum())
+            for dataset in self.datasets
+        )
+        mean_value = value_sum / num_samples
+        variance = max(0.0, value_squared_sum / num_samples - mean_value**2)
+        return {
+            "num_samples": float(num_samples),
+            "mean_value": mean_value,
+            "std_value": variance**0.5,
+            "positive_values": sum(
+                float((dataset.values > 0).sum()) for dataset in self.datasets
+            ),
+            "negative_values": sum(
+                float((dataset.values < 0).sum()) for dataset in self.datasets
+            ),
+            "zero_values": sum(
+                float((dataset.values == 0).sum()) for dataset in self.datasets
+            ),
+        }
+
+
 class SymmetryAugmentedDataset(Dataset):
     """Lazily expose D4 rotations/reflections of self-play examples."""
 
     def __init__(
         self,
-        dataset: SelfPlayDataset,
+        dataset: SelfPlayDataset | ReplayBufferDataset,
         symmetry_count: SymmetryCount = 8,
     ) -> None:
         if symmetry_count not in _SYMMETRY_INDICES:

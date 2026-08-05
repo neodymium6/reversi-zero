@@ -9,7 +9,11 @@ import numpy as np
 import pytest
 import torch
 
-from reversi_zero_trainer.data import SelfPlayDataset, SymmetryAugmentedDataset
+from reversi_zero_trainer.data import (
+    ReplayBufferDataset,
+    SelfPlayDataset,
+    SymmetryAugmentedDataset,
+)
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
@@ -56,6 +60,38 @@ def test_selfplay_dataset_loading(dummy_training_data):
     assert stats["num_samples"] == 100
     assert "mean_value" in stats
     assert "std_value" in stats
+
+
+def test_replay_buffer_lazily_concatenates_iterations(tmp_path):
+    data_dirs = []
+    for iteration, (num_samples, marker, value) in enumerate(
+        [(2, 1.0, -1.0), (3, 2.0, 1.0)]
+    ):
+        data_dir = tmp_path / f"selfplay_iter_{iteration}"
+        data_dir.mkdir()
+        states = np.full((num_samples, 3, 8, 8), marker, dtype=np.float32)
+        policies = np.full((num_samples, 64), marker, dtype=np.float32)
+        values = np.full(num_samples, value, dtype=np.float32)
+        np.save(data_dir / "states.npy", states)
+        np.save(data_dir / "policies.npy", policies)
+        np.save(data_dir / "values.npy", values)
+        data_dirs.append(data_dir)
+
+    dataset = ReplayBufferDataset(data_dirs)
+
+    assert len(dataset) == 5
+    assert dataset[1][0][0, 0, 0].item() == pytest.approx(1.0)
+    assert dataset[2][0][0, 0, 0].item() == pytest.approx(2.0)
+    assert dataset[-1][2].item() == pytest.approx(1.0)
+    stats = dataset.get_stats()
+    assert stats["mean_value"] == pytest.approx(0.2)
+    assert stats["positive_values"] == 3
+    assert stats["negative_values"] == 2
+
+
+def test_replay_buffer_requires_data():
+    with pytest.raises(ValueError, match="at least one"):
+        ReplayBufferDataset([])
 
 
 def test_symmetry_augmentation_transforms_state_and_policy_together(tmp_path):
@@ -167,6 +203,24 @@ def test_training_uses_augmented_data_but_evaluation_does_not(
 
     assert len(training_dataloader.dataset) == 800
     assert len(evaluation_dataloader.dataset) == 100
+
+
+def test_training_applies_symmetry_after_replay_concatenation(dummy_training_data):
+    model = DummyReversiNet()
+    config = TrainingConfig(
+        batch_size=32,
+        num_workers=0,
+        symmetry_augmentation=8,
+        device="cpu",
+    )
+    trainer = AlphaZeroTrainer(model=model, config=config)
+
+    training_dataloader, evaluation_dataloader = trainer._create_dataloaders(
+        [dummy_training_data, dummy_training_data]
+    )
+
+    assert len(training_dataloader.dataset) == 1600
+    assert len(evaluation_dataloader.dataset) == 200
 
 
 def test_training_multiple_epochs(dummy_training_data):

@@ -6,7 +6,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator, Literal
+from typing import Generator, Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -15,7 +15,13 @@ from rust_reversi import Arena
 from torch.optim import AdamW, Optimizer
 from torch.utils.data import DataLoader
 
-from reversi_zero_trainer.data import SelfPlayDataset, SymmetryAugmentedDataset
+from reversi_zero_trainer.data import (
+    ReplayBufferDataset,
+    SelfPlayDataset,
+    SymmetryAugmentedDataset,
+)
+
+TrainingDataSource = Path | str | Sequence[Path | str]
 
 
 @dataclass
@@ -97,10 +103,14 @@ class AlphaZeroTrainer:
         self.total_epochs_trained = 0
 
     def _create_dataloaders(
-        self, data_path: Path | str
+        self, data_path: TrainingDataSource
     ) -> tuple[DataLoader, DataLoader]:
         """Create augmented training and unmodified evaluation dataloaders."""
-        evaluation_dataset = SelfPlayDataset(data_path)
+        evaluation_dataset: SelfPlayDataset | ReplayBufferDataset
+        if isinstance(data_path, (Path, str)):
+            evaluation_dataset = SelfPlayDataset(data_path)
+        else:
+            evaluation_dataset = ReplayBufferDataset(list(data_path))
         training_dataset = (
             evaluation_dataset
             if self.config.symmetry_augmentation == 1
@@ -457,7 +467,7 @@ class AlphaZeroTrainer:
 
     def train(
         self,
-        data_path: Path | str,
+        data_path: TrainingDataSource,
         num_epochs: int | None = None,
     ) -> Generator[dict[str, float], None, None]:
         """
@@ -467,7 +477,7 @@ class AlphaZeroTrainer:
         to continue training on new self-play data.
 
         Args:
-            data_path: Path to directory containing states.npy, policies.npy, values.npy
+            data_path: One or more directories containing self-play NPY files
             num_epochs: Number of epochs to train. If None, uses config.num_epochs
 
         Yields:

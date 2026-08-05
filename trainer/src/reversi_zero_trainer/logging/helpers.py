@@ -93,6 +93,7 @@ def log_hyperparameters(
     logger: BaseLogger,
     num_iterations: int,
     seed: int,
+    replay_window: int,
     selfplay_config: dict[str, Any],
     train_config: TrainingConfig,
     model_config: dict[str, Any],
@@ -107,6 +108,7 @@ def log_hyperparameters(
         logger: Logger instance
         num_iterations: Number of training iterations
         seed: PyTorch seed for model initialization and training shuffles
+        replay_window: Number of recent self-play iterations used for training
         selfplay_config: Self-play configuration
         train_config: Training configuration
         model_config: Model configuration
@@ -119,6 +121,7 @@ def log_hyperparameters(
     logger.log_param("num_iterations", num_iterations)
     logger.log_param("device", device)
     logger.log_param("seed", seed)
+    logger.log_param("train_replay_window", replay_window)
 
     # Self-play parameters
     logger.log_param("selfplay_games_per_iter", selfplay_config["games_per_iter"])
