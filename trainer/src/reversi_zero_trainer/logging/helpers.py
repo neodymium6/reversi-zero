@@ -92,6 +92,11 @@ def log_hyperparameters(
     logger.log_param("selfplay_report_interval", selfplay_config["report_interval"])
     logger.log_param("selfplay_batch_size", selfplay_config["batch_size"])
     logger.log_param("selfplay_game_concurrency", selfplay_config["game_concurrency"])
+    logger.log_param("selfplay_batch_timeout_ms", selfplay_config["batch_timeout_ms"])
+    logger.log_param(
+        "selfplay_expansion_batch_size", selfplay_config["expansion_batch_size"]
+    )
+    logger.log_param("torch_threads", selfplay_config["torch_threads"])
     logger.log_param("selfplay_num_simulations", selfplay_config["num_simulations"])
 
     # Training parameters

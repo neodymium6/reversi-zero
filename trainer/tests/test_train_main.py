@@ -1,5 +1,6 @@
 """Tests for safe training run setup and CLI configuration."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,10 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert state.start_iteration == 0
     assert state.checkpoint_path is None
     assert (run_dir / "run_config.json").is_file()
+    stored = json.loads((run_dir / "run_config.json").read_text(encoding="utf-8"))
+    assert stored["torch_threads"] == 4
+    assert stored["selfplay_batch_size"] == 32
+    assert 1 <= stored["selfplay_game_concurrency"] <= 16
 
 
 def test_prepare_run_refuses_existing_directory_without_resume(tmp_path):
@@ -94,3 +99,35 @@ def test_parse_args_maps_training_options():
     assert config.train_num_epochs == 3
     assert config.model_type == "resnet"
     assert not config.arena_enabled
+
+
+def test_cpu_runtime_defaults_are_tuned_for_selfplay():
+    config = RunConfig(device="cpu", selfplay_games_per_iter=64)
+
+    assert config.resolved_torch_threads("cpu") == 4
+    assert config.resolved_selfplay_batch_size("cpu") == 32
+    assert config.resolved_selfplay_game_concurrency("cpu") == 16
+    assert config.report_interval() == 16
+
+
+def test_cuda_runtime_defaults_remain_unchanged():
+    config = RunConfig(device="cuda")
+
+    assert config.resolved_torch_threads("cuda") is None
+    assert config.resolved_selfplay_batch_size("cuda") == 128
+    assert config.resolved_selfplay_game_concurrency("cuda") == 32
+
+
+def test_explicit_selfplay_runtime_settings_are_respected():
+    config = RunConfig(
+        device="cpu",
+        selfplay_games_per_iter=64,
+        selfplay_report_interval=8,
+        torch_threads=2,
+        selfplay_batch_size=16,
+        selfplay_game_concurrency=4,
+    )
+
+    assert config.resolved_torch_threads("cpu") == 2
+    assert config.resolved_selfplay_batch_size("cpu") == 16
+    assert config.resolved_selfplay_game_concurrency("cpu") == 4

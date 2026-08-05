@@ -24,3 +24,19 @@ def configure_mcts_player_threads(
     torch.set_num_threads(threads)
     torch.set_num_interop_threads(1)
     return threads
+
+
+def configure_training_threads(
+    device: str, requested_threads: int | None
+) -> int | None:
+    """Configure Torch threads for CPU self-play and training."""
+
+    if requested_threads is not None and requested_threads <= 0:
+        raise ValueError("Torch thread count must be positive")
+    if device != "cpu":
+        return None
+
+    threads = requested_threads if requested_threads is not None else 4
+    torch.set_num_threads(threads)
+    torch.set_num_interop_threads(1)
+    return threads

@@ -162,7 +162,7 @@ is above 50%. Random and Alpha-Beta references are also available via
 - **PUCT selection** with proper minimax Q-value handling
 - **Dirichlet noise** for exploration during self-play
 - **Batched inference** - Groups neural network calls for GPU efficiency
-- **Parallel self-play** - 32 concurrent games using rayon
+- **Parallel self-play** - Device-aware concurrent games using rayon
 - **Temperature sampling** - Configurable exploration vs exploitation
 
 ### Training System
@@ -188,8 +188,10 @@ Key parameters in `train_main.py`:
 ```python
 # Game generation
 selfplay_games_per_iter = 128 * factor    # Games per iteration
-selfplay_game_concurrency = 32             # Parallel games
+selfplay_batch_size = 32                   # CPU default; 128 on CUDA
+selfplay_game_concurrency = 16             # CPU maximum; 32 on CUDA
 selfplay_num_simulations = 100             # MCTS simulations per move
+torch_threads = 4                          # CPU default; unchanged on CUDA
 
 # MCTS configuration
 selfplay_c_puct = 3.0                      # Exploration constant

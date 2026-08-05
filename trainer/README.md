@@ -39,6 +39,12 @@ Passing an existing directory without `--resume` is an error.
 
 See `../scripts/train --help` for all configuration options.
 
+CPU training automatically uses four Torch threads, an NN inference batch of
+32, and up to 16 concurrent self-play games. These values avoid CPU
+oversubscription and can be overridden with `--torch-threads`,
+`--selfplay-batch-size`, and `--game-concurrency`. CUDA retains the previous
+batch and threading defaults.
+
 Evaluate a trained snapshot against its initial model with fixed paired
 openings:
 

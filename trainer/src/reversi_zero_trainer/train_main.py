@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -24,6 +25,7 @@ from reversi_zero_trainer.logging import (
     log_training_metrics,
 )
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
+from reversi_zero_trainer.runtime import configure_training_threads
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
 
@@ -35,11 +37,12 @@ class RunConfig:
     resume: bool = False
     num_iterations: int = 10
     device: Literal["auto", "cuda", "cpu"] = "auto"
+    torch_threads: int | None = None
 
     selfplay_games_per_iter: int = 128
     selfplay_report_interval: int | None = None
-    selfplay_batch_size: int = 128
-    selfplay_game_concurrency: int = 32
+    selfplay_batch_size: int | None = None
+    selfplay_game_concurrency: int | None = None
     selfplay_batch_timeout_ms: int = 1
     selfplay_num_simulations: int = 100
     selfplay_expansion_batch_size: int = 2
@@ -66,7 +69,8 @@ class RunConfig:
     def report_interval(self) -> int:
         if self.selfplay_report_interval is not None:
             return self.selfplay_report_interval
-        return max(1, self.selfplay_games_per_iter // 8)
+        concurrency_floor = min(self.selfplay_games_per_iter, 16)
+        return max(1, self.selfplay_games_per_iter // 8, concurrency_floor)
 
     def resolved_device(self) -> Literal["cuda", "cpu"]:
         if self.device == "auto":
@@ -75,13 +79,34 @@ class RunConfig:
             raise RuntimeError("CUDA was requested, but it is not available")
         return self.device
 
+    def resolved_torch_threads(self, device: str) -> int | None:
+        if device != "cpu":
+            return None
+        return self.torch_threads if self.torch_threads is not None else 4
+
+    def resolved_selfplay_batch_size(self, device: str) -> int:
+        if self.selfplay_batch_size is not None:
+            return self.selfplay_batch_size
+        return 32 if device == "cpu" else 128
+
+    def resolved_selfplay_game_concurrency(self, device: str) -> int:
+        if self.selfplay_game_concurrency is not None:
+            configured = self.selfplay_game_concurrency
+        elif device == "cpu":
+            affinity = getattr(os, "sched_getaffinity", None)
+            available_cpus = (
+                len(affinity(0)) if affinity is not None else os.cpu_count()
+            )
+            configured = min(16, available_cpus or 1)
+        else:
+            configured = 32
+        return min(configured, self.selfplay_games_per_iter)
+
     def validate(self) -> None:
         positive_ints = {
             "num_iterations": self.num_iterations,
             "selfplay_games_per_iter": self.selfplay_games_per_iter,
             "selfplay_report_interval": self.report_interval(),
-            "selfplay_batch_size": self.selfplay_batch_size,
-            "selfplay_game_concurrency": self.selfplay_game_concurrency,
             "selfplay_batch_timeout_ms": self.selfplay_batch_timeout_ms,
             "selfplay_num_simulations": self.selfplay_num_simulations,
             "selfplay_expansion_batch_size": self.selfplay_expansion_batch_size,
@@ -93,6 +118,16 @@ class RunConfig:
             "model_num_blocks": self.model_num_blocks,
         }
         invalid = [name for name, value in positive_ints.items() if value <= 0]
+        optional_positive_ints = {
+            "torch_threads": self.torch_threads,
+            "selfplay_batch_size": self.selfplay_batch_size,
+            "selfplay_game_concurrency": self.selfplay_game_concurrency,
+        }
+        invalid.extend(
+            name
+            for name, value in optional_positive_ints.items()
+            if value is not None and value <= 0
+        )
         if invalid:
             raise ValueError(f"These settings must be > 0: {', '.join(invalid)}")
         if self.train_num_workers < 0:
@@ -114,8 +149,14 @@ def default_run_dir(now: datetime | None = None) -> Path:
 
 def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
     payload = asdict(config)
+    device = config.resolved_device()
     payload["run_dir"] = str(run_dir)
     payload["report_interval"] = config.report_interval()
+    payload["torch_threads"] = config.resolved_torch_threads(device)
+    payload["selfplay_batch_size"] = config.resolved_selfplay_batch_size(device)
+    payload["selfplay_game_concurrency"] = config.resolved_selfplay_game_concurrency(
+        device
+    )
     return payload
 
 
@@ -244,11 +285,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--num-iterations", type=int, default=10)
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        help="Torch CPU threads for self-play and training (default: 4 on CPU)",
+    )
 
     parser.add_argument("--games-per-iteration", type=int, default=128)
     parser.add_argument("--report-interval", type=int)
-    parser.add_argument("--selfplay-batch-size", type=int, default=128)
-    parser.add_argument("--game-concurrency", type=int, default=32)
+    parser.add_argument(
+        "--selfplay-batch-size",
+        type=int,
+        help="NN inference batch size (default: 32 on CPU, 128 on CUDA)",
+    )
+    parser.add_argument(
+        "--game-concurrency",
+        type=int,
+        help="Parallel games (default: up to 16 on CPU, 32 on CUDA)",
+    )
     parser.add_argument("--batch-timeout-ms", type=int, default=1)
     parser.add_argument("--simulations", type=int, default=100)
     parser.add_argument("--expansion-batch-size", type=int, default=2)
@@ -281,6 +335,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         resume=args.resume,
         num_iterations=args.num_iterations,
         device=args.device,
+        torch_threads=args.torch_threads,
         selfplay_games_per_iter=args.games_per_iteration,
         selfplay_report_interval=args.report_interval,
         selfplay_batch_size=args.selfplay_batch_size,
@@ -311,6 +366,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Run the configured AlphaZero training loop."""
     config = parse_args(argv)
     device = config.resolved_device()
+    torch_threads = config.resolved_torch_threads(device)
+    configure_training_threads(device, torch_threads)
+    selfplay_batch_size = config.resolved_selfplay_batch_size(device)
+    selfplay_game_concurrency = config.resolved_selfplay_game_concurrency(device)
     state = prepare_run(config)
     run_dir = state.run_dir
     data_base_dir = run_dir / "data"
@@ -371,8 +430,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             selfplay_config={
                 "games_per_iter": config.selfplay_games_per_iter,
                 "report_interval": config.report_interval(),
-                "batch_size": config.selfplay_batch_size,
-                "game_concurrency": config.selfplay_game_concurrency,
+                "batch_size": selfplay_batch_size,
+                "game_concurrency": selfplay_game_concurrency,
+                "batch_timeout_ms": config.selfplay_batch_timeout_ms,
+                "expansion_batch_size": config.selfplay_expansion_batch_size,
+                "torch_threads": torch_threads,
                 "num_simulations": config.selfplay_num_simulations,
             },
             train_config=train_config,
@@ -417,8 +479,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 total_games=config.selfplay_games_per_iter,
                 report_interval=config.report_interval(),
                 batch=BatchConfigArgs(
-                    batch_size=config.selfplay_batch_size,
-                    game_concurrency=config.selfplay_game_concurrency,
+                    batch_size=selfplay_batch_size,
+                    game_concurrency=selfplay_game_concurrency,
                     batch_timeout_ms=config.selfplay_batch_timeout_ms,
                 ),
                 mcts=MctsConfigArgs(

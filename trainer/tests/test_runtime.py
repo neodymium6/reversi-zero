@@ -33,3 +33,20 @@ def test_cuda_mcts_player_keeps_torch_defaults(monkeypatch):
     )
 
     assert runtime.configure_mcts_player_threads("cuda", 4) is None
+
+
+def test_cpu_training_defaults_to_four_torch_threads(monkeypatch):
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        runtime.torch, "set_num_threads", lambda value: calls.append(("intra", value))
+    )
+    monkeypatch.setattr(
+        runtime.torch,
+        "set_num_interop_threads",
+        lambda value: calls.append(("interop", value)),
+    )
+
+    configured = runtime.configure_training_threads("cpu", None)
+
+    assert configured == 4
+    assert calls == [("intra", 4), ("interop", 1)]
