@@ -88,6 +88,14 @@ Use `../scripts/evaluate --help` for fixed Alpha-Beta/Random references,
 opening-suite reuse, independent challenger/reference expansion batch sizes,
 search settings, and promotion thresholds.
 
+Training uses the same paired evaluator as a promotion gate by default. After
+each iteration, the candidate must score at least 55% against the incumbent
+over 40 openings played with both colors, and the 95% interval lower bound must
+exceed 50%. A rejected candidate's model and checkpoint are retained under
+`models/ts/candidates/` and `checkpoints/`, while the incumbent model and
+optimizer are restored for the next iteration. Use `--no-promotion` to disable
+gating or `--no-promotion-require-confidence` to use only the score threshold.
+
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before
 continuing. Checkpoints and TorchScript models are also replaced atomically.

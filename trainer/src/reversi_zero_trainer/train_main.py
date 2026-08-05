@@ -8,10 +8,11 @@ import json
 import math
 import os
 import re
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 import torch
 from reversi_zero_rs import BatchConfigArgs, MctsConfigArgs, SelfPlayStream
@@ -22,8 +23,13 @@ from reversi_zero_trainer.logging import (
     LoggingConfig,
     create_logger,
     log_hyperparameters,
+    log_promotion_metrics,
     log_selfplay_stats,
     log_training_metrics,
+)
+from reversi_zero_trainer.evaluate_main import (
+    run as run_model_evaluation,
+    write_report as write_evaluation_report,
 )
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
 from reversi_zero_trainer.runtime import configure_training_threads
@@ -65,6 +71,16 @@ class RunConfig:
     arena_mcts_sims: int = 400
     arena_alphabeta_temperature: float = 0.5
     arena_random_temperature: float = 0.0
+
+    promotion_enabled: bool = True
+    promotion_num_openings: int = 40
+    promotion_opening_plies: int = 8
+    promotion_seed: int = 0
+    promotion_mcts_sims: int | None = None
+    promotion_c_puct: float = 1.5
+    promotion_expansion_batch_size: int | None = None
+    promotion_threshold: float = 0.55
+    promotion_require_confidence: bool = True
 
     model_type: Literal["dummy", "resnet"] = "dummy"
     model_channels: int = 64
@@ -116,6 +132,12 @@ class RunConfig:
             return "float16" if device == "cuda" else "float32"
         return self.inference_dtype
 
+    def resolved_promotion_mcts_sims(self) -> int:
+        return self.promotion_mcts_sims or self.selfplay_num_simulations
+
+    def resolved_promotion_expansion_batch_size(self) -> int:
+        return self.promotion_expansion_batch_size or self.selfplay_expansion_batch_size
+
     def validate(self) -> None:
         positive_ints = {
             "num_iterations": self.num_iterations,
@@ -128,6 +150,11 @@ class RunConfig:
             "train_num_epochs": self.train_num_epochs,
             "arena_games": self.arena_games,
             "arena_mcts_sims": self.arena_mcts_sims,
+            "promotion_num_openings": self.promotion_num_openings,
+            "promotion_mcts_sims": self.resolved_promotion_mcts_sims(),
+            "promotion_expansion_batch_size": (
+                self.resolved_promotion_expansion_batch_size()
+            ),
             "model_channels": self.model_channels,
             "model_num_blocks": self.model_num_blocks,
         }
@@ -136,6 +163,8 @@ class RunConfig:
             "torch_threads": self.torch_threads,
             "selfplay_batch_size": self.selfplay_batch_size,
             "selfplay_game_concurrency": self.selfplay_game_concurrency,
+            "promotion_mcts_sims": self.promotion_mcts_sims,
+            "promotion_expansion_batch_size": self.promotion_expansion_batch_size,
         }
         invalid.extend(
             name
@@ -148,6 +177,12 @@ class RunConfig:
             raise ValueError("train_num_workers must be >= 0")
         if self.train_symmetry_augmentation not in (1, 2, 4, 8):
             raise ValueError("train_symmetry_augmentation must be one of 1, 2, 4, or 8")
+        if self.promotion_opening_plies < 0:
+            raise ValueError("promotion_opening_plies must be >= 0")
+        if self.promotion_c_puct <= 0:
+            raise ValueError("promotion_c_puct must be > 0")
+        if not 0.0 <= self.promotion_threshold <= 1.0:
+            raise ValueError("promotion_threshold must be between 0 and 1")
         device = self.resolved_device()
         if self.resolved_inference_dtype(device) == "float16" and device != "cuda":
             raise ValueError("float16 inference requires CUDA")
@@ -158,6 +193,130 @@ class RunState:
     run_dir: Path
     start_iteration: int
     checkpoint_path: Path | None
+
+
+@dataclass(frozen=True)
+class TrainerSnapshot:
+    """Restorable incumbent model and optimizer state."""
+
+    model_state_dict: dict[str, Any]
+    optimizer_state_dict: dict[str, Any]
+
+
+def capture_trainer_snapshot(trainer: AlphaZeroTrainer) -> TrainerSnapshot:
+    """Capture incumbent state before candidate training."""
+    return TrainerSnapshot(
+        model_state_dict=copy.deepcopy(trainer.model.state_dict()),
+        optimizer_state_dict=copy.deepcopy(trainer.optimizer.state_dict()),
+    )
+
+
+def restore_trainer_snapshot(
+    trainer: AlphaZeroTrainer, snapshot: TrainerSnapshot
+) -> None:
+    """Restore a rejected candidate to the incumbent training state."""
+    trainer.model.load_state_dict(snapshot.model_state_dict)
+    trainer.optimizer.load_state_dict(snapshot.optimizer_state_dict)
+
+
+def promotion_is_accepted(
+    report: dict[str, Any], threshold: float, require_confidence: bool
+) -> bool:
+    """Apply the configured promotion rule to an evaluation report."""
+    summary = report["summary"]
+    score = float(summary["score"])
+    interval_low = float(summary["score_interval_95"][0])
+    return score >= threshold and (not require_confidence or interval_low > 0.5)
+
+
+def evaluate_promotion_candidate(
+    candidate_path: Path,
+    incumbent_path: Path,
+    report_path: Path,
+    config: RunConfig,
+    iteration: int,
+    device: str,
+    torch_threads: int | None,
+) -> dict[str, Any]:
+    """Evaluate a candidate against the incumbent and persist the report."""
+    args = argparse.Namespace(
+        challenger=candidate_path,
+        reference_model=incumbent_path,
+        reference_alphabeta=False,
+        reference_random=False,
+        output=report_path,
+        overwrite=False,
+        openings_from=None,
+        num_openings=config.promotion_num_openings,
+        opening_plies=config.promotion_opening_plies,
+        seed=config.promotion_seed + iteration,
+        device=device,
+        torch_threads=torch_threads or 1,
+        simulations=config.resolved_promotion_mcts_sims(),
+        c_puct=config.promotion_c_puct,
+        challenger_expansion_batch_size=(
+            config.resolved_promotion_expansion_batch_size()
+        ),
+        reference_expansion_batch_size=(
+            config.resolved_promotion_expansion_batch_size()
+        ),
+        alphabeta_depth=3,
+        promotion_threshold=config.promotion_threshold,
+        show_progress=False,
+    )
+    report = run_model_evaluation(args)
+    report["config"]["promotion_require_confidence"] = (
+        config.promotion_require_confidence
+    )
+    report["summary"]["promotion_accepted"] = promotion_is_accepted(
+        report,
+        threshold=config.promotion_threshold,
+        require_confidence=config.promotion_require_confidence,
+    )
+    write_evaluation_report(report, report_path)
+    return report
+
+
+def _copy_file_atomically(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    next_path = destination.with_name(f".{destination.name}.next")
+    if next_path.exists():
+        raise FileExistsError(f"Refusing ambiguous partial file: {next_path}")
+    try:
+        shutil.copyfile(source, next_path)
+        next_path.replace(destination)
+    finally:
+        next_path.unlink(missing_ok=True)
+
+
+def finalize_candidate(
+    trainer: AlphaZeroTrainer,
+    snapshot: TrainerSnapshot,
+    iteration: int,
+    incumbent_model_path: Path,
+    candidate_model_path: Path,
+    candidate_checkpoint_path: Path,
+    next_model_path: Path,
+    accepted: bool,
+) -> Path:
+    """Promote a candidate or restore the incumbent, then mark iteration complete."""
+    checkpoint_path = Path(trainer.config.checkpoint_dir) / (
+        f"checkpoint_iter_{iteration}.pt"
+    )
+    if checkpoint_path.exists() or next_model_path.exists():
+        raise FileExistsError("Refusing to overwrite completed iteration artifacts")
+
+    if accepted:
+        candidate_model_path.replace(next_model_path)
+        candidate_checkpoint_path.replace(checkpoint_path)
+        return checkpoint_path
+
+    restore_trainer_snapshot(trainer, snapshot)
+    _copy_file_atomically(incumbent_model_path, next_model_path)
+    return trainer.save_checkpoint(
+        iteration,
+        filename=checkpoint_path.name,
+    )
 
 
 def default_run_dir(now: datetime | None = None) -> Path:
@@ -178,6 +337,10 @@ def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
     )
     payload["train_num_workers"] = config.resolved_train_num_workers(device)
     payload["inference_dtype"] = config.resolved_inference_dtype(device)
+    payload["promotion_mcts_sims"] = config.resolved_promotion_mcts_sims()
+    payload["promotion_expansion_batch_size"] = (
+        config.resolved_promotion_expansion_batch_size()
+    )
     return payload
 
 
@@ -405,6 +568,34 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--arena-alphabeta-temperature", type=float, default=0.5)
     parser.add_argument("--arena-random-temperature", type=float, default=0.0)
 
+    parser.add_argument(
+        "--promotion",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require candidate-vs-incumbent evaluation before model promotion",
+    )
+    parser.add_argument("--promotion-openings", type=int, default=40)
+    parser.add_argument("--promotion-opening-plies", type=int, default=8)
+    parser.add_argument("--promotion-seed", type=int, default=0)
+    parser.add_argument(
+        "--promotion-simulations",
+        type=int,
+        help="MCTS simulations for promotion (default: self-play simulations)",
+    )
+    parser.add_argument("--promotion-c-puct", type=float, default=1.5)
+    parser.add_argument(
+        "--promotion-expansion-batch-size",
+        type=int,
+        help="MCTS expansion batch size for promotion (default: self-play setting)",
+    )
+    parser.add_argument("--promotion-threshold", type=float, default=0.55)
+    parser.add_argument(
+        "--promotion-require-confidence",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Also require the 95%% score interval lower bound to exceed 50%%",
+    )
+
     parser.add_argument("--model", choices=["dummy", "resnet"], default="dummy")
     parser.add_argument("--model-channels", type=int, default=64)
     parser.add_argument("--model-blocks", type=int, default=6)
@@ -442,6 +633,15 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         arena_mcts_sims=args.arena_mcts_sims,
         arena_alphabeta_temperature=args.arena_alphabeta_temperature,
         arena_random_temperature=args.arena_random_temperature,
+        promotion_enabled=args.promotion,
+        promotion_num_openings=args.promotion_openings,
+        promotion_opening_plies=args.promotion_opening_plies,
+        promotion_seed=args.promotion_seed,
+        promotion_mcts_sims=args.promotion_simulations,
+        promotion_c_puct=args.promotion_c_puct,
+        promotion_expansion_batch_size=args.promotion_expansion_batch_size,
+        promotion_threshold=args.promotion_threshold,
+        promotion_require_confidence=args.promotion_require_confidence,
         model_type=args.model,
         model_channels=args.model_channels,
         model_num_blocks=args.model_blocks,
@@ -462,8 +662,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     run_dir = state.run_dir
     data_base_dir = run_dir / "data"
     models_dir = run_dir / "models" / "ts"
+    candidate_models_dir = models_dir / "candidates"
     checkpoints_dir = run_dir / "checkpoints"
+    evaluations_dir = run_dir / "evaluations"
     models_dir.mkdir(parents=True, exist_ok=True)
+    if config.promotion_enabled:
+        candidate_models_dir.mkdir(parents=True, exist_ok=True)
+        evaluations_dir.mkdir(parents=True, exist_ok=True)
 
     torch.manual_seed(config.seed)
     if device == "cuda":
@@ -552,6 +757,18 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "alphabeta_temperature": train_config.arena_alphabeta_temperature,
                 "random_temperature": train_config.arena_random_temperature,
             },
+            promotion_config={
+                "enabled": config.promotion_enabled,
+                "num_openings": config.promotion_num_openings,
+                "opening_plies": config.promotion_opening_plies,
+                "mcts_sims": config.resolved_promotion_mcts_sims(),
+                "c_puct": config.promotion_c_puct,
+                "expansion_batch_size": (
+                    config.resolved_promotion_expansion_batch_size()
+                ),
+                "threshold": config.promotion_threshold,
+                "require_confidence": config.promotion_require_confidence,
+            },
             paths={
                 "run_dir": run_dir,
                 "data_base_dir": data_base_dir,
@@ -564,6 +781,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         steps_per_iteration = (
             math.ceil(config.selfplay_games_per_iter / config.report_interval())
             + config.train_num_epochs
+            + int(config.promotion_enabled)
         )
         global_step = state.start_iteration * steps_per_iteration
 
@@ -597,6 +815,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 log_selfplay_stats(logger, stats, iteration, global_step)
                 global_step += 1
 
+            incumbent_snapshot = (
+                capture_trainer_snapshot(trainer) if config.promotion_enabled else None
+            )
             for epoch_metrics in trainer.train(
                 data_path=selfplay_data_dir,
                 num_epochs=train_config.num_epochs,
@@ -604,19 +825,75 @@ def main(argv: Sequence[str] | None = None) -> None:
                 log_training_metrics(logger, epoch_metrics, iteration, global_step)
                 global_step += 1
 
-            checkpoint_path = trainer.save_checkpoint(
-                iteration,
-                filename=f"checkpoint_iter_{iteration}.pt",
-            )
-            logger.log_artifact("checkpoint", str(checkpoint_path))
-
             next_model_path = models_dir / f"model_iter_{iteration + 1}.pt"
-            export_model_to_torchscript(
-                model,
-                next_model_path,
-                device=device,
-                inference_dtype=inference_dtype,
-            )
+            if config.promotion_enabled:
+                if incumbent_snapshot is None:
+                    raise RuntimeError("Missing incumbent snapshot")
+                candidate_model_path = (
+                    candidate_models_dir / f"candidate_iter_{iteration}.pt"
+                )
+                candidate_checkpoint_path = trainer.save_checkpoint(
+                    iteration,
+                    filename=f"candidate_iter_{iteration}.pt",
+                )
+                export_model_to_torchscript(
+                    model,
+                    candidate_model_path,
+                    device=device,
+                    inference_dtype=inference_dtype,
+                )
+                report_path = evaluations_dir / f"promotion_iter_{iteration}.json"
+                report = evaluate_promotion_candidate(
+                    candidate_path=candidate_model_path,
+                    incumbent_path=current_model_path,
+                    report_path=report_path,
+                    config=config,
+                    iteration=iteration,
+                    device=device,
+                    torch_threads=torch_threads,
+                )
+                accepted = bool(report["summary"]["promotion_accepted"])
+                log_promotion_metrics(
+                    logger,
+                    report,
+                    accepted=accepted,
+                    iteration=iteration,
+                    step=global_step,
+                )
+                global_step += 1
+                logger.log_artifact("promotion evaluation", str(report_path))
+                checkpoint_path = finalize_candidate(
+                    trainer=trainer,
+                    snapshot=incumbent_snapshot,
+                    iteration=iteration,
+                    incumbent_model_path=current_model_path,
+                    candidate_model_path=candidate_model_path,
+                    candidate_checkpoint_path=candidate_checkpoint_path,
+                    next_model_path=next_model_path,
+                    accepted=accepted,
+                )
+                if not accepted:
+                    logger.log_artifact(
+                        "rejected candidate checkpoint",
+                        str(candidate_checkpoint_path),
+                    )
+                    logger.log_artifact(
+                        "rejected candidate model",
+                        str(candidate_model_path),
+                    )
+            else:
+                checkpoint_path = trainer.save_checkpoint(
+                    iteration,
+                    filename=f"checkpoint_iter_{iteration}.pt",
+                )
+                export_model_to_torchscript(
+                    model,
+                    next_model_path,
+                    device=device,
+                    inference_dtype=inference_dtype,
+                )
+
+            logger.log_artifact("checkpoint", str(checkpoint_path))
             logger.log_artifact("model", str(next_model_path))
 
         final_model_path = models_dir / "model_final.pt"

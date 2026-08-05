@@ -24,7 +24,12 @@ Example:
 
 from .base import BaseLogger, ListLogger, create_logger
 from .config import BaseLoggerConfig, ConsoleConfig, LoggerKind, LoggingConfig
-from .helpers import log_hyperparameters, log_selfplay_stats, log_training_metrics
+from .helpers import (
+    log_hyperparameters,
+    log_promotion_metrics,
+    log_selfplay_stats,
+    log_training_metrics,
+)
 
 # Import to trigger @register_logger decorators
 from . import console  # noqa: F401
@@ -38,6 +43,7 @@ __all__ = [
     "ConsoleConfig",
     "LoggerKind",
     "log_hyperparameters",
+    "log_promotion_metrics",
     "log_selfplay_stats",
     "log_training_metrics",
 ]

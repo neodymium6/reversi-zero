@@ -61,6 +61,34 @@ def log_training_metrics(
         )
 
 
+def log_promotion_metrics(
+    logger: BaseLogger,
+    report: dict[str, Any],
+    accepted: bool,
+    iteration: int,
+    step: int,
+) -> None:
+    """Log candidate-vs-incumbent promotion results."""
+    summary = report["summary"]
+    interval = summary["score_interval_95"]
+    metrics = {
+        "score": summary["score"],
+        "score_interval_low": interval[0],
+        "score_interval_high": interval[1],
+        "wins": summary["wins"],
+        "draws": summary["draws"],
+        "losses": summary["losses"],
+        "accepted": float(accepted),
+    }
+    for name, value in metrics.items():
+        logger.log_metric(
+            f"iter_{iteration}/promotion/{name}",
+            float(value),
+            step=step,
+            color="green",
+        )
+
+
 def log_hyperparameters(
     logger: BaseLogger,
     num_iterations: int,
@@ -69,6 +97,7 @@ def log_hyperparameters(
     train_config: TrainingConfig,
     model_config: dict[str, Any],
     arena_config: dict[str, Any],
+    promotion_config: dict[str, Any],
     paths: dict[str, Path],
     device: str,
 ) -> None:
@@ -82,6 +111,7 @@ def log_hyperparameters(
         train_config: Training configuration
         model_config: Model configuration
         arena_config: Arena evaluation configuration
+        promotion_config: Candidate promotion configuration
         paths: Dictionary of paths (data_base_dir, models_dir, checkpoint_dir)
         device: Device being used
     """
@@ -127,6 +157,20 @@ def log_hyperparameters(
         "arena_alphabeta_temperature", arena_config["alphabeta_temperature"]
     )
     logger.log_param("arena_random_temperature", arena_config["random_temperature"])
+
+    # Candidate promotion parameters
+    logger.log_param("promotion_enabled", promotion_config["enabled"])
+    logger.log_param("promotion_num_openings", promotion_config["num_openings"])
+    logger.log_param("promotion_opening_plies", promotion_config["opening_plies"])
+    logger.log_param("promotion_mcts_sims", promotion_config["mcts_sims"])
+    logger.log_param("promotion_c_puct", promotion_config["c_puct"])
+    logger.log_param(
+        "promotion_expansion_batch_size", promotion_config["expansion_batch_size"]
+    )
+    logger.log_param("promotion_threshold", promotion_config["threshold"])
+    logger.log_param(
+        "promotion_require_confidence", promotion_config["require_confidence"]
+    )
 
     # Paths
     logger.log_param("run_dir", str(paths["run_dir"]))

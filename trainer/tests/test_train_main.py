@@ -7,13 +7,20 @@ from pathlib import Path
 import pytest
 import torch
 
+import reversi_zero_trainer.train_main as train_main
 from reversi_zero_trainer.train_main import (
     RunConfig,
     _Float16InferenceWrapper,
+    capture_trainer_snapshot,
     default_run_dir,
+    evaluate_promotion_candidate,
+    finalize_candidate,
     parse_args,
     prepare_run,
+    promotion_is_accepted,
 )
+from reversi_zero_trainer.models.dummy import DummyReversiNet
+from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
 
 def test_default_run_dir_is_timestamped():
@@ -36,6 +43,11 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
     assert stored["train_num_workers"] == 0
     assert stored["train_symmetry_augmentation"] == 8
+    assert stored["promotion_enabled"] is True
+    assert stored["promotion_num_openings"] == 40
+    assert stored["promotion_mcts_sims"] == 100
+    assert stored["promotion_expansion_batch_size"] == 4
+    assert stored["promotion_require_confidence"] is True
     assert stored["inference_dtype"] == "float32"
 
 
@@ -97,6 +109,17 @@ def test_parse_args_maps_training_options():
             "3",
             "--symmetry-augmentation",
             "4",
+            "--promotion-openings",
+            "12",
+            "--promotion-opening-plies",
+            "6",
+            "--promotion-simulations",
+            "50",
+            "--promotion-expansion-batch-size",
+            "2",
+            "--promotion-threshold",
+            "0.6",
+            "--promotion-require-confidence",
             "--model",
             "resnet",
             "--inference-dtype",
@@ -111,6 +134,12 @@ def test_parse_args_maps_training_options():
     assert config.selfplay_games_per_iter == 16
     assert config.train_num_epochs == 3
     assert config.train_symmetry_augmentation == 4
+    assert config.promotion_num_openings == 12
+    assert config.promotion_opening_plies == 6
+    assert config.resolved_promotion_mcts_sims() == 50
+    assert config.resolved_promotion_expansion_batch_size() == 2
+    assert config.promotion_threshold == pytest.approx(0.6)
+    assert config.promotion_require_confidence
     assert config.model_type == "resnet"
     assert config.inference_dtype == "float16"
     assert not config.arena_enabled
@@ -121,6 +150,145 @@ def test_run_config_rejects_invalid_symmetry_augmentation():
 
     with pytest.raises(ValueError, match="one of 1, 2, 4, or 8"):
         config.validate()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"promotion_num_openings": 0}, "must be > 0"),
+        ({"promotion_opening_plies": -1}, "must be >= 0"),
+        ({"promotion_mcts_sims": 0}, "must be > 0"),
+        ({"promotion_expansion_batch_size": 0}, "must be > 0"),
+        ({"promotion_c_puct": 0.0}, "must be > 0"),
+        ({"promotion_threshold": 1.1}, "between 0 and 1"),
+    ],
+)
+def test_run_config_rejects_invalid_promotion_settings(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        RunConfig(**kwargs).validate()
+
+
+def test_promotion_rule_can_optionally_require_confidence():
+    report = {"summary": {"score": 0.6, "score_interval_95": [0.49, 0.7]}}
+
+    assert promotion_is_accepted(report, threshold=0.55, require_confidence=False)
+    assert not promotion_is_accepted(report, threshold=0.55, require_confidence=True)
+
+
+def test_evaluate_promotion_candidate_persists_decision(tmp_path, monkeypatch):
+    candidate = tmp_path / "candidate.pt"
+    incumbent = tmp_path / "incumbent.pt"
+    candidate.touch()
+    incumbent.touch()
+    output = tmp_path / "promotion.json"
+
+    def fake_evaluation(args):
+        assert args.seed == 12
+        assert args.simulations == 25
+        assert args.challenger == candidate
+        assert args.reference_model == incumbent
+        return {
+            "config": {},
+            "summary": {
+                "score": 0.6,
+                "score_interval_95": [0.49, 0.7],
+            },
+        }
+
+    monkeypatch.setattr(train_main, "run_model_evaluation", fake_evaluation)
+    report = evaluate_promotion_candidate(
+        candidate_path=candidate,
+        incumbent_path=incumbent,
+        report_path=output,
+        config=RunConfig(
+            promotion_seed=10,
+            promotion_mcts_sims=25,
+            promotion_require_confidence=False,
+        ),
+        iteration=2,
+        device="cpu",
+        torch_threads=1,
+    )
+
+    assert report["summary"]["promotion_accepted"] is True
+    assert output.is_file()
+    stored = json.loads(output.read_text(encoding="utf-8"))
+    assert stored["summary"]["promotion_accepted"] is True
+
+
+def test_finalize_candidate_promotes_candidate_files(tmp_path):
+    trainer = AlphaZeroTrainer(
+        model=DummyReversiNet(),
+        config=TrainingConfig(device="cpu", checkpoint_dir=tmp_path / "checkpoints"),
+    )
+    snapshot = capture_trainer_snapshot(trainer)
+    incumbent_model = tmp_path / "incumbent.pt"
+    candidate_model = tmp_path / "candidate.pt"
+    candidate_checkpoint = tmp_path / "checkpoints" / "candidate_iter_0.pt"
+    next_model = tmp_path / "next.pt"
+    incumbent_model.write_bytes(b"incumbent")
+    candidate_model.write_bytes(b"candidate")
+    candidate_checkpoint.write_bytes(b"candidate checkpoint")
+
+    checkpoint = finalize_candidate(
+        trainer,
+        snapshot,
+        iteration=0,
+        incumbent_model_path=incumbent_model,
+        candidate_model_path=candidate_model,
+        candidate_checkpoint_path=candidate_checkpoint,
+        next_model_path=next_model,
+        accepted=True,
+    )
+
+    assert next_model.read_bytes() == b"candidate"
+    assert checkpoint.read_bytes() == b"candidate checkpoint"
+    assert not candidate_model.exists()
+    assert not candidate_checkpoint.exists()
+
+
+def test_finalize_candidate_restores_incumbent_and_optimizer(tmp_path):
+    trainer = AlphaZeroTrainer(
+        model=DummyReversiNet(),
+        config=TrainingConfig(device="cpu", checkpoint_dir=tmp_path / "checkpoints"),
+    )
+    snapshot = capture_trainer_snapshot(trainer)
+    expected_parameters = {
+        name: parameter.detach().clone()
+        for name, parameter in trainer.model.named_parameters()
+    }
+
+    inputs = torch.randn(2, 3, 8, 8)
+    policy, value = trainer.model(inputs)
+    (policy.sum() + value.sum()).backward()
+    trainer.optimizer.step()
+    assert trainer.optimizer.state_dict()["state"]
+
+    incumbent_model = tmp_path / "incumbent.pt"
+    candidate_model = tmp_path / "candidate.pt"
+    incumbent_model.write_bytes(b"incumbent")
+    candidate_model.write_bytes(b"candidate")
+    candidate_checkpoint = trainer.save_checkpoint(0, filename="candidate_iter_0.pt")
+    next_model = tmp_path / "next.pt"
+
+    checkpoint = finalize_candidate(
+        trainer,
+        snapshot,
+        iteration=0,
+        incumbent_model_path=incumbent_model,
+        candidate_model_path=candidate_model,
+        candidate_checkpoint_path=candidate_checkpoint,
+        next_model_path=next_model,
+        accepted=False,
+    )
+
+    assert next_model.read_bytes() == b"incumbent"
+    assert candidate_model.read_bytes() == b"candidate"
+    assert candidate_checkpoint.exists()
+    assert checkpoint.exists()
+    assert trainer.optimizer.state_dict()["state"] == {}
+    for name, parameter in trainer.model.named_parameters():
+        assert torch.equal(parameter, expected_parameters[name])
 
 
 def test_float16_inference_requires_cuda():

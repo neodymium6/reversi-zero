@@ -91,6 +91,7 @@ full AlphaZero training loop (10 iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 128)
 2. **Neural network training** - 10 epochs per iteration
 3. **Arena evaluation** - Test vs Alpha-Beta and Random players
+4. **Candidate promotion** - Replace the incumbent only after a paired direct match
 
 Existing run directories are never reused implicitly. To select a stable name:
 
@@ -121,10 +122,14 @@ runs/<timestamp>/
 │   └── selfplay_iter_1/
 ├── checkpoints/
 │   ├── checkpoint_iter_0.pt
-│   └── checkpoint_iter_1.pt
+│   ├── checkpoint_iter_1.pt
+│   └── candidate_iter_1.pt  # Retained only when rejected
+├── evaluations/
+│   └── promotion_iter_1.json
 └── models/ts/
     ├── model_iter_0.pt     # TorchScript model for self-play
     ├── model_iter_1.pt
+    ├── candidates/         # Rejected candidate models
     └── model_final.pt
 ```
 
@@ -230,6 +235,12 @@ arena_games = 10                           # Games per opponent
 arena_mcts_sims = 400                      # MCTS simulations
 arena_alphabeta_temperature = 0.5          # Temperature vs Alpha-Beta
 arena_random_temperature = 0.0             # Temperature vs Random
+
+# Candidate promotion
+promotion_enabled = True                   # Gate each new self-play model
+promotion_num_openings = 40                # Played twice with colors swapped
+promotion_threshold = 0.55                 # Draws count as half a win
+promotion_require_confidence = True        # Require CI lower bound > 50%
 ```
 
 ## Development
