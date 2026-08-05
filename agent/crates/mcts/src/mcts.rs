@@ -1,6 +1,7 @@
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::thread_rng;
 use reversi_core::Board;
+use std::collections::HashSet;
 
 use crate::backup::backup;
 use crate::config::MctsConfig;
@@ -9,7 +10,7 @@ use crate::error::{MctsError, Result};
 use crate::evaluation::{PolicyValueModel, tensor_to_f32, tensor_to_vec_f32};
 use crate::expansion::{calculate_terminal_value, expand_and_evaluate, expand_with_policy_value};
 use crate::search_result::SearchResult;
-use crate::selection::select;
+use crate::selection::{apply_virtual_loss, revert_virtual_loss, select};
 use crate::tree::{MctsTree, NodeId};
 use tch::Tensor;
 
@@ -57,20 +58,38 @@ impl Mcts {
 
             // Select a batch of leaves
             let mut leaf_ids = Vec::with_capacity(current_batch);
+            let mut selected_leaves = HashSet::with_capacity(current_batch);
             for _ in 0..current_batch {
                 let leaf_id = select(&self.tree, root_id, config.c_puct);
+
+                // Virtual loss normally steers the following selection to a
+                // different leaf. A forced line or an extremely strong prior
+                // can still return the same leaf, so stop this batch rather
+                // than expanding that node twice.
+                if !selected_leaves.insert(leaf_id) {
+                    break;
+                }
+
+                apply_virtual_loss(&mut self.tree, leaf_id);
                 leaf_ids.push(leaf_id);
+            }
+
+            // Virtual losses affect selection only. Restore the real tree
+            // statistics before evaluation and backup.
+            for &leaf_id in &leaf_ids {
+                revert_virtual_loss(&mut self.tree, leaf_id);
             }
 
             // Expand & evaluate the batch
             let values = self.expand_and_evaluate_batch(&leaf_ids, model)?;
+            let simulations_in_batch = leaf_ids.len() as u32;
 
             // Backup each value along the selected path
             for (leaf_id, value) in leaf_ids.into_iter().zip(values.into_iter()) {
                 backup(&mut self.tree, leaf_id, value);
             }
 
-            sims_done += current_batch as u32;
+            sims_done += simulations_in_batch;
         }
 
         // 4. Extract results
@@ -286,6 +305,23 @@ mod tests {
     use super::*;
 
     use crate::tree::MctsTree;
+    use tch::{Device, Kind};
+
+    struct BatchedDummyModel;
+
+    impl PolicyValueModel for BatchedDummyModel {
+        fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
+            let batch_size = x.size()[0];
+            Ok((
+                Tensor::zeros([batch_size, 64], (Kind::Float, Device::Cpu)),
+                Tensor::zeros([batch_size, 1], (Kind::Float, Device::Cpu)),
+            ))
+        }
+
+        fn device(&self) -> Device {
+            Device::Cpu
+        }
+    }
 
     #[test]
     fn test_mcts_creation() {
@@ -298,6 +334,37 @@ mod tests {
         let mut mcts = Mcts::new();
         mcts.reset();
         assert_eq!(mcts.tree_size(), 0);
+    }
+
+    #[test]
+    fn test_batched_search_does_not_expand_the_same_leaf_twice() {
+        let mut mcts = Mcts::new();
+        let board = Board::new();
+        let config = MctsConfig::default()
+            .with_simulations(16)
+            .with_batch_size(4)
+            .with_temperature(0.0);
+
+        let result = mcts.search(&board, &BatchedDummyModel, &config).unwrap();
+
+        assert_eq!(result.total_visits(), config.num_simulations);
+        assert!(
+            mcts.tree
+                .nodes
+                .iter()
+                .all(|node| node.virtual_visit_count == 0)
+        );
+
+        for node in &mcts.tree.nodes {
+            let mut child_actions = HashSet::with_capacity(node.children.len());
+            for &child_id in &node.children {
+                let action = mcts.tree.nodes[child_id].move_action;
+                assert!(
+                    child_actions.insert(action),
+                    "node contains duplicate child action {action:?}"
+                );
+            }
+        }
     }
 
     #[test]

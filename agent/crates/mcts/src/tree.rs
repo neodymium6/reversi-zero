@@ -20,6 +20,9 @@ pub struct MctsNode {
     /// Number of times this node has been visited
     pub visit_count: u32,
 
+    /// Temporary visits reserved by an in-flight simulation batch
+    pub virtual_visit_count: u32,
+
     /// Sum of values backed up through this node
     pub total_value: f32,
 
@@ -45,6 +48,7 @@ impl MctsNode {
             parent: None,
             children: Vec::new(),
             visit_count: 0,
+            virtual_visit_count: 0,
             total_value: 0.0,
             prior_probability: 1.0,
             is_terminal: false,
@@ -61,6 +65,7 @@ impl MctsNode {
             parent: Some(parent),
             children: Vec::new(),
             visit_count: 0,
+            virtual_visit_count: 0,
             total_value: 0.0,
             prior_probability: prior,
             is_terminal: false,
@@ -75,6 +80,25 @@ impl MctsNode {
             0.0
         } else {
             self.total_value / self.visit_count as f32
+        }
+    }
+
+    /// Visit count used while selecting a batch of simulations.
+    pub fn selection_visit_count(&self) -> u32 {
+        self.visit_count + self.virtual_visit_count
+    }
+
+    /// Q-value used during selection, including an in-flight virtual loss.
+    ///
+    /// A virtual visit is treated as a win for the child node, which is a loss
+    /// from its parent's perspective. This discourages another simulation in
+    /// the same batch from selecting the same path.
+    pub fn selection_q_value(&self) -> f32 {
+        let visits = self.selection_visit_count();
+        if visits == 0 {
+            0.0
+        } else {
+            (self.total_value + self.virtual_visit_count as f32) / visits as f32
         }
     }
 }

@@ -16,7 +16,7 @@ pub fn select(tree: &MctsTree, root_id: NodeId, c_puct: f32) -> NodeId {
         }
 
         // Select child with max PUCT
-        let sqrt_parent = (node.visit_count as f32).sqrt();
+        let sqrt_parent = (node.selection_visit_count() as f32).sqrt();
 
         let best_child = node
             .children
@@ -49,12 +49,36 @@ fn puct_value(tree: &MctsTree, node_id: NodeId, sqrt_parent: f32, c_puct: f32) -
     let node = &tree.nodes[node_id];
 
     // Q value (exploitation)
-    let q = -node.q_value();
+    let q = -node.selection_q_value();
 
     // U value (exploration)
-    let u = c_puct * node.prior_probability * sqrt_parent / (1.0 + node.visit_count as f32);
+    let u =
+        c_puct * node.prior_probability * sqrt_parent / (1.0 + node.selection_visit_count() as f32);
 
     q + u
+}
+
+/// Reserve a selected path while the rest of a simulation batch is selected.
+pub fn apply_virtual_loss(tree: &mut MctsTree, leaf_id: NodeId) {
+    let mut current_id = Some(leaf_id);
+
+    while let Some(node_id) = current_id {
+        let node = &mut tree.nodes[node_id];
+        node.virtual_visit_count += 1;
+        current_id = node.parent;
+    }
+}
+
+/// Release a path reserved by [`apply_virtual_loss`].
+pub fn revert_virtual_loss(tree: &mut MctsTree, leaf_id: NodeId) {
+    let mut current_id = Some(leaf_id);
+
+    while let Some(node_id) = current_id {
+        let node = &mut tree.nodes[node_id];
+        debug_assert!(node.virtual_visit_count > 0);
+        node.virtual_visit_count -= 1;
+        current_id = node.parent;
+    }
 }
 
 #[cfg(test)]
