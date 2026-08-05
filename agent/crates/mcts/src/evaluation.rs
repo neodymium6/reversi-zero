@@ -29,8 +29,9 @@ pub fn evaluate_with_nn<M: PolicyValueModel>(board: &Board, model: &M) -> Result
     // Get tensor [3, 8, 8]
     let tensor = board.to_tensor();
 
-    // Add batch dimension [1, 3, 8, 8] and move to model's device
-    let input = tensor.unsqueeze(0).to_device(model.device());
+    // Add batch dimension [1, 3, 8, 8]. The model owns device placement so a
+    // batching wrapper can combine CPU inputs before transferring them.
+    let input = tensor.unsqueeze(0);
 
     // Forward pass
     let (policy_tensor, value_tensor) = model.forward(&input)?;

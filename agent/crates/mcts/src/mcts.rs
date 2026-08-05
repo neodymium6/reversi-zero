@@ -267,7 +267,10 @@ impl Mcts {
         // Evaluate pending boards in one forward pass (if any).
         if !pending.is_empty() {
             let tensors: Vec<Tensor> = pending.iter().map(|p| p.board.to_tensor()).collect();
-            let input = Tensor::stack(&tensors, 0).to_device(model.device());
+            // Device placement belongs to the model boundary. Keeping these
+            // small per-search batches on CPU lets BatchingModel combine them
+            // before a single HtoD transfer.
+            let input = Tensor::stack(&tensors, 0);
             let (policy_batch, value_batch) = model.forward(&input)?;
 
             for (batch_idx, item) in pending.into_iter().enumerate() {

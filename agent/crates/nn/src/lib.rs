@@ -18,7 +18,10 @@ impl NnModel {
     }
 
     pub fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
-        let input_ivalue = IValue::Tensor(x.shallow_clone());
+        // Keep device I/O at the model boundary. Batching callers can aggregate
+        // CPU inputs before one HtoD transfer, and consumers receive complete
+        // CPU output batches rather than synchronizing once per leaf.
+        let input_ivalue = IValue::Tensor(x.to_device(self.device));
         let iv = no_grad(|| self.module.forward_is(&[input_ivalue]))?;
 
         match iv {
@@ -29,8 +32,8 @@ impl NnModel {
                     let value_iv = elems.pop().unwrap();
                     let policy_iv = elems.pop().unwrap();
 
-                    let policy = tensor_from_ivalue(policy_iv)?;
-                    let value = tensor_from_ivalue(value_iv)?;
+                    let policy = tensor_from_ivalue(policy_iv)?.to_device(Device::Cpu);
+                    let value = tensor_from_ivalue(value_iv)?.to_device(Device::Cpu);
                     Ok((policy, value))
                 }
             }

@@ -16,7 +16,10 @@ pub struct BatchingModel<M: PolicyValueModel + Send + Sync + 'static> {
 }
 
 struct BatchWork {
+    // Always normalized to [B, C, H, W]. A work item may contain a complete
+    // MCTS expansion batch rather than one leaf.
     input: Tensor,
+    unbatched: bool,
     resp_tx: Sender<Result<(Tensor, Tensor), tch::TchError>>,
 }
 
@@ -61,65 +64,29 @@ impl<M: PolicyValueModel + Send + Sync + 'static> Clone for BatchingModel<M> {
 
 impl<M: PolicyValueModel + Send + Sync + 'static> PolicyValueModel for BatchingModel<M> {
     fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
-        // If caller passes a batch (B, C, H, W), enqueue all samples at once and then
-        // reassemble outputs to preserve batching while keeping worker inputs 3D.
-        if x.dim() == 4 && x.size()[0] > 1 {
-            let batch = x.size()[0] as usize;
-            let mut policy_parts = Vec::with_capacity(batch);
-            let mut value_parts = Vec::with_capacity(batch);
-            let mut receivers = Vec::with_capacity(batch);
-
-            for i in 0..batch {
-                let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
-                let input = x.get(i as i64).squeeze_dim(0); // [C, H, W]
-                self.inner
-                    .sender
-                    .send(BatchWork { input, resp_tx })
-                    .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
-                receivers.push(resp_rx);
+        let (input, unbatched) = match x.dim() {
+            3 => (x.unsqueeze(0), true),
+            4 => (x.shallow_clone(), false),
+            dimensions => {
+                return Err(tch::TchError::Kind(format!(
+                    "Expected a 3D or 4D input tensor, got {dimensions} dimensions"
+                )));
             }
+        };
+        let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
 
-            for rx in receivers {
-                let (p, v) = rx
-                    .recv()
-                    .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))??;
-                policy_parts.push(p);
-                value_parts.push(v);
-            }
+        self.inner
+            .sender
+            .send(BatchWork {
+                input,
+                unbatched,
+                resp_tx,
+            })
+            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
 
-            let policy = Tensor::stack(&policy_parts, 0);
-            let value = Tensor::stack(&value_parts, 0);
-            Ok((policy, value))
-        } else {
-            let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
-
-            // Preserve the public model contract: a 4D batched input must
-            // produce batched outputs even when B == 1. Worker responses are
-            // intentionally unbatched so they can be reassembled by callers.
-            let preserve_batch_dim = x.dim() == 4;
-
-            // Normalize to 3D before sending to worker to avoid 5D stacks.
-            let input = if preserve_batch_dim && x.size()[0] == 1 {
-                x.squeeze_dim(0)
-            } else {
-                x.shallow_clone()
-            };
-
-            self.inner
-                .sender
-                .send(BatchWork { input, resp_tx })
-                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
-
-            let (policy, value) = resp_rx
-                .recv()
-                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))??;
-
-            if preserve_batch_dim {
-                Ok((policy.unsqueeze(0), value.unsqueeze(0)))
-            } else {
-                Ok((policy, value))
-            }
-        }
+        resp_rx
+            .recv()
+            .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
     }
 
     fn device(&self) -> Device {
@@ -133,17 +100,24 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
     timeout: Duration,
     rx: Receiver<BatchWork>,
 ) {
-    // Loop until all senders are dropped.
-    while let Ok(first) = rx.recv() {
-        let mut batch_inputs = Vec::with_capacity(batch_size);
-        let mut responders = Vec::with_capacity(batch_size);
+    let mut pending = None;
 
-        batch_inputs.push(first.input);
-        responders.push(first.resp_tx);
+    // Loop until all senders are dropped.
+    loop {
+        let first = match pending.take() {
+            Some(work) => work,
+            None => match rx.recv() {
+                Ok(work) => work,
+                Err(_) => break,
+            },
+        };
+        let mut sample_count = first.input.size()[0] as usize;
+        let mut works = Vec::with_capacity(batch_size.min(64));
+        works.push(first);
 
         // Fill up to batch_size or until timeout expires.
         let deadline = Instant::now() + timeout;
-        while responders.len() < batch_size {
+        while sample_count < batch_size {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -151,32 +125,50 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
             let recv_result = rx.recv_timeout(remaining);
             match recv_result {
                 Ok(work) => {
-                    batch_inputs.push(work.input);
-                    responders.push(work.resp_tx);
+                    let work_samples = work.input.size()[0] as usize;
+                    if sample_count + work_samples > batch_size {
+                        pending = Some(work);
+                        break;
+                    }
+                    sample_count += work_samples;
+                    works.push(work);
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => break,
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
         }
 
-        // Run a single forward pass with stacked inputs.
-        let stacked = Tensor::stack(&batch_inputs, 0);
-        let forward_result = model.forward(&stacked);
+        // Concatenate complete request batches on CPU, then let the underlying
+        // model perform one device transfer for the full inference batch.
+        let batch_inputs: Vec<_> = works
+            .iter()
+            .map(|work| work.input.shallow_clone())
+            .collect();
+        let combined = Tensor::cat(&batch_inputs, 0);
+        let forward_result = model.forward(&combined);
 
         match forward_result {
             Ok((policy_batch, value_batch)) => {
-                // Slice per item and send.
-                for (i, tx) in responders.into_iter().enumerate() {
-                    let policy = policy_batch.get(i as i64);
-                    let value = value_batch.get(i as i64);
-                    let _ = tx.send(Ok((policy, value)));
+                // Outputs have already crossed to CPU as complete batches.
+                // Split them per request without further device synchronization.
+                let mut offset = 0i64;
+                for work in works {
+                    let request_size = work.input.size()[0];
+                    let mut policy = policy_batch.narrow(0, offset, request_size);
+                    let mut value = value_batch.narrow(0, offset, request_size);
+                    if work.unbatched {
+                        policy = policy.squeeze_dim(0);
+                        value = value.squeeze_dim(0);
+                    }
+                    let _ = work.resp_tx.send(Ok((policy, value)));
+                    offset += request_size;
                 }
             }
             Err(err) => {
                 // Convert to a simple Kind error to clone for each responder.
                 let msg = format!("Batch forward failed: {err}");
-                for tx in responders {
-                    let _ = tx.send(Err(tch::TchError::Kind(msg.clone())));
+                for work in works {
+                    let _ = work.resp_tx.send(Err(tch::TchError::Kind(msg.clone())));
                 }
             }
         }
@@ -186,6 +178,7 @@ fn worker_loop<M: PolicyValueModel + Send + Sync + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tch::{Kind, Tensor};
 
@@ -242,5 +235,71 @@ mod tests {
             assert_eq!(policy.size(), [1, 64]);
             assert_eq!(value.size(), [1, 1]);
         }
+    }
+
+    struct RecordingModel {
+        calls: Arc<AtomicUsize>,
+        largest_batch: Arc<AtomicUsize>,
+    }
+
+    impl PolicyValueModel for RecordingModel {
+        fn forward(&self, x: &Tensor) -> tch::Result<(Tensor, Tensor)> {
+            let batch = x.size()[0] as usize;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.largest_batch.fetch_max(batch, Ordering::SeqCst);
+            Ok((
+                Tensor::zeros([batch as i64, 64], (Kind::Float, Device::Cpu)),
+                Tensor::zeros([batch as i64, 1], (Kind::Float, Device::Cpu)),
+            ))
+        }
+
+        fn device(&self) -> Device {
+            Device::Cpu
+        }
+    }
+
+    #[test]
+    fn combines_complete_request_batches_and_preserves_shapes() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let largest_batch = Arc::new(AtomicUsize::new(0));
+        let model = RecordingModel {
+            calls: Arc::clone(&calls),
+            largest_batch: Arc::clone(&largest_batch),
+        };
+        let batching = BatchingModel::new(model, 8, Duration::from_millis(100));
+        let barrier = Arc::new(Barrier::new(3));
+
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let batching = batching.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let input = Tensor::zeros([4, 3, 8, 8], (Kind::Float, Device::Cpu));
+                    barrier.wait();
+                    batching.forward(&input)
+                })
+            })
+            .collect();
+        barrier.wait();
+
+        for handle in handles {
+            let (policy, value) = handle.join().unwrap().unwrap();
+            assert_eq!(policy.size(), [4, 64]);
+            assert_eq!(value.size(), [4, 1]);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(largest_batch.load(Ordering::SeqCst), 8);
+    }
+
+    #[test]
+    fn preserves_unbatched_output_contract() {
+        let model = DummyModel::new();
+        let batching = BatchingModel::new(model, 8, Duration::from_millis(1));
+        let input = Tensor::zeros([3, 8, 8], (Kind::Float, Device::Cpu));
+
+        let (policy, value) = batching.forward(&input).unwrap();
+
+        assert_eq!(policy.size(), [64]);
+        assert_eq!(value.size(), [1]);
     }
 }
