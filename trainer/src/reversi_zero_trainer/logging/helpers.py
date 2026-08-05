@@ -101,6 +101,7 @@ def log_hyperparameters(
 
     # Training parameters
     logger.log_param("train_batch_size", train_config.batch_size)
+    logger.log_param("train_num_workers", train_config.num_workers)
     logger.log_param("train_num_epochs", train_config.num_epochs)
     logger.log_param("train_learning_rate", train_config.learning_rate)
     logger.log_param("train_weight_decay", train_config.weight_decay)

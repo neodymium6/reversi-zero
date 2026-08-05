@@ -31,6 +31,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["torch_threads"] == 4
     assert stored["selfplay_batch_size"] == 32
     assert 1 <= stored["selfplay_game_concurrency"] <= 16
+    assert stored["train_num_workers"] == 0
 
 
 def test_prepare_run_refuses_existing_directory_without_resume(tmp_path):
@@ -107,6 +108,7 @@ def test_cpu_runtime_defaults_are_tuned_for_selfplay():
     assert config.resolved_torch_threads("cpu") == 4
     assert config.resolved_selfplay_batch_size("cpu") == 32
     assert config.resolved_selfplay_game_concurrency("cpu") == 16
+    assert config.resolved_train_num_workers("cpu") == 0
     assert config.report_interval() == 16
 
 
@@ -116,6 +118,7 @@ def test_cuda_runtime_defaults_remain_unchanged():
     assert config.resolved_torch_threads("cuda") is None
     assert config.resolved_selfplay_batch_size("cuda") == 128
     assert config.resolved_selfplay_game_concurrency("cuda") == 32
+    assert config.resolved_train_num_workers("cuda") == 4
 
 
 def test_explicit_selfplay_runtime_settings_are_respected():
@@ -126,8 +129,10 @@ def test_explicit_selfplay_runtime_settings_are_respected():
         torch_threads=2,
         selfplay_batch_size=16,
         selfplay_game_concurrency=4,
+        train_num_workers=2,
     )
 
     assert config.resolved_torch_threads("cpu") == 2
     assert config.resolved_selfplay_batch_size("cpu") == 16
     assert config.resolved_selfplay_game_concurrency("cpu") == 4
+    assert config.resolved_train_num_workers("cpu") == 2

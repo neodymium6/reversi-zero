@@ -45,6 +45,10 @@ oversubscription and can be overridden with `--torch-threads`,
 `--selfplay-batch-size`, and `--game-concurrency`. CUDA retains the previous
 batch and threading defaults.
 
+The in-memory self-play dataset also defaults to zero DataLoader workers on
+CPU, avoiding multiprocessing startup and transfer overhead. CUDA retains four
+workers. Use `--num-workers N` to override either default.
+
 Evaluate a trained snapshot against its initial model with fixed paired
 openings:
 

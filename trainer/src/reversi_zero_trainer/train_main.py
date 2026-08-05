@@ -49,7 +49,7 @@ class RunConfig:
     selfplay_c_puct: float = 3.0
 
     train_batch_size: int = 256
-    train_num_workers: int = 4
+    train_num_workers: int | None = None
     train_num_epochs: int = 10
     train_learning_rate: float = 0.001
     train_weight_decay: float = 1e-4
@@ -102,6 +102,11 @@ class RunConfig:
             configured = 32
         return min(configured, self.selfplay_games_per_iter)
 
+    def resolved_train_num_workers(self, device: str) -> int:
+        if self.train_num_workers is not None:
+            return self.train_num_workers
+        return 0 if device == "cpu" else 4
+
     def validate(self) -> None:
         positive_ints = {
             "num_iterations": self.num_iterations,
@@ -130,7 +135,7 @@ class RunConfig:
         )
         if invalid:
             raise ValueError(f"These settings must be > 0: {', '.join(invalid)}")
-        if self.train_num_workers < 0:
+        if self.train_num_workers is not None and self.train_num_workers < 0:
             raise ValueError("train_num_workers must be >= 0")
 
 
@@ -157,6 +162,7 @@ def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
     payload["selfplay_game_concurrency"] = config.resolved_selfplay_game_concurrency(
         device
     )
+    payload["train_num_workers"] = config.resolved_train_num_workers(device)
     return payload
 
 
@@ -309,7 +315,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--c-puct", type=float, default=3.0)
 
     parser.add_argument("--train-batch-size", type=int, default=256)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        help="DataLoader workers (default: 0 on CPU, 4 on CUDA)",
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -370,6 +380,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     configure_training_threads(device, torch_threads)
     selfplay_batch_size = config.resolved_selfplay_batch_size(device)
     selfplay_game_concurrency = config.resolved_selfplay_game_concurrency(device)
+    train_num_workers = config.resolved_train_num_workers(device)
     state = prepare_run(config)
     run_dir = state.run_dir
     data_base_dir = run_dir / "data"
@@ -379,7 +390,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     train_config = TrainingConfig(
         batch_size=config.train_batch_size,
-        num_workers=config.train_num_workers,
+        num_workers=train_num_workers,
         num_epochs=config.train_num_epochs,
         learning_rate=config.train_learning_rate,
         weight_decay=config.train_weight_decay,

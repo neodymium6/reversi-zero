@@ -203,6 +203,7 @@ selfplay_expansion_batch_size = 2          # Expansion batch size
 ```python
 # Training configuration
 batch_size = 256                           # Training batch size
+num_workers = 0                            # CPU default; 4 on CUDA
 num_epochs = 10                            # Epochs per iteration
 learning_rate = 0.001                      # Adam learning rate
 weight_decay = 1e-4                        # L2 regularization
