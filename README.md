@@ -91,8 +91,7 @@ full AlphaZero training loop (10 iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 128)
 2. **Neural network training** - 10 epochs per iteration
 3. **Candidate promotion** - Replace the incumbent only after a paired direct match
-4. **Reference evaluation** - Test the selected incumbent against Random,
-   Alpha-Beta, and BitMatrix using one shared opening suite
+4. **Reference evaluation** - Test the selected incumbent against BitMatrix
 
 Existing run directories are never reused implicitly. To select a stable name:
 
@@ -128,8 +127,6 @@ runs/<timestamp>/
 │   └── candidate_iter_1.pt  # Retained only when rejected
 ├── evaluations/
 │   ├── promotion_iter_1.json
-│   ├── reference_random_iter_1.json
-│   ├── reference_alphabeta_iter_1.json
 │   └── reference_bitmatrix_iter_1.json
 └── models/ts/
     ├── model_iter_0.pt     # TorchScript model for self-play
@@ -240,7 +237,7 @@ weight_decay = 1e-4                        # L2 regularization
 ```python
 # Only two dedicated reference-evaluation controls
 reference_eval_enabled = True              # Evaluate every selected incumbent
-reference_games = 40                       # Total paired games per opponent
+reference_games = 40                       # Total paired games against BitMatrix
 
 # Candidate promotion
 promotion_enabled = True                   # Gate each new self-play model

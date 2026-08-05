@@ -109,12 +109,12 @@ to disable gating or `promotion.require_confidence=false` to use only the score
 threshold.
 
 After promotion, the selected incumbent is automatically evaluated against
-Random, Alpha-Beta, and BitMatrix with one fixed opening suite shared across
-opponents and iterations. The
-reference search reuses the self-play simulation and expansion settings; the
-opening length and seed reuse the promotion settings. This leaves only two
-dedicated controls: `reference.enabled=false` disables the suite, and
-`reference.games=N` changes the even total number of games per opponent.
+BitMatrix. Random and Alpha-Beta remain available through the standalone
+evaluation command for manual smoke tests. The reference search reuses the
+self-play simulation and expansion settings; the opening length and seed reuse
+the promotion settings. This leaves only two dedicated controls:
+`reference.enabled=false` disables the evaluation, and `reference.games=N`
+changes the even total number of games against BitMatrix.
 
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before

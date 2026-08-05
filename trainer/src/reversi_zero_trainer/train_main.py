@@ -289,48 +289,42 @@ def evaluate_promotion_candidate(
     return report
 
 
-def evaluate_reference_opponents(
+def evaluate_bitmatrix_reference(
     model_path: Path,
     evaluations_dir: Path,
     config: RunConfig,
     iteration: int,
     device: str,
     torch_threads: int | None,
-) -> dict[str, tuple[dict[str, Any], Path]]:
-    """Evaluate the selected incumbent against all fixed reference opponents."""
-    results: dict[str, tuple[dict[str, Any], Path]] = {}
-    opening_source: Path | None = None
-    for opponent in ("random", "alphabeta", "bitmatrix"):
-        report_path = evaluations_dir / f"reference_{opponent}_iter_{iteration}.json"
-        args = Namespace(
-            challenger=model_path,
-            reference_model=None,
-            reference_alphabeta=opponent == "alphabeta",
-            reference_bitmatrix=opponent == "bitmatrix",
-            reference_random=opponent == "random",
-            output=report_path,
-            overwrite=False,
-            openings_from=opening_source,
-            num_openings=config.reference_games // 2,
-            opening_plies=config.promotion_opening_plies,
-            seed=config.promotion_seed,
-            device=device,
-            torch_threads=torch_threads or 1,
-            simulations=config.selfplay_num_simulations,
-            c_puct=config.promotion_c_puct,
-            challenger_expansion_batch_size=config.selfplay_expansion_batch_size,
-            reference_expansion_batch_size=1,
-            alphabeta_depth=3,
-            bitmatrix_depth=3,
-            promotion_threshold=0.5,
-            show_progress=False,
-        )
-        report = run_model_evaluation(args)
-        write_evaluation_report(report, report_path)
-        results[opponent] = (report, report_path)
-        if opening_source is None:
-            opening_source = report_path
-    return results
+) -> tuple[dict[str, Any], Path]:
+    """Evaluate the selected incumbent against the fixed BitMatrix reference."""
+    report_path = evaluations_dir / f"reference_bitmatrix_iter_{iteration}.json"
+    args = Namespace(
+        challenger=model_path,
+        reference_model=None,
+        reference_alphabeta=False,
+        reference_bitmatrix=True,
+        reference_random=False,
+        output=report_path,
+        overwrite=False,
+        openings_from=None,
+        num_openings=config.reference_games // 2,
+        opening_plies=config.promotion_opening_plies,
+        seed=config.promotion_seed,
+        device=device,
+        torch_threads=torch_threads or 1,
+        simulations=config.selfplay_num_simulations,
+        c_puct=config.promotion_c_puct,
+        challenger_expansion_batch_size=config.selfplay_expansion_batch_size,
+        reference_expansion_batch_size=1,
+        alphabeta_depth=3,
+        bitmatrix_depth=3,
+        promotion_threshold=0.5,
+        show_progress=False,
+    )
+    report = run_model_evaluation(args)
+    write_evaluation_report(report, report_path)
+    return report, report_path
 
 
 def _copy_file_atomically(source: Path, destination: Path) -> None:
@@ -750,7 +744,7 @@ def run_training(config: RunConfig) -> None:
             math.ceil(config.selfplay_games_per_iter / config.report_interval())
             + config.train_num_epochs
             + int(config.promotion_enabled)
-            + 3 * int(config.reference_eval_enabled)
+            + int(config.reference_eval_enabled)
         )
         global_step = state.start_iteration * steps_per_iteration
 
@@ -867,7 +861,7 @@ def run_training(config: RunConfig) -> None:
                 )
 
             if config.reference_eval_enabled:
-                reference_results = evaluate_reference_opponents(
+                reference_report, reference_path = evaluate_bitmatrix_reference(
                     model_path=next_model_path,
                     evaluations_dir=evaluations_dir,
                     config=config,
@@ -875,22 +869,18 @@ def run_training(config: RunConfig) -> None:
                     device=device,
                     torch_threads=torch_threads,
                 )
-                for opponent, (
-                    reference_report,
-                    reference_path,
-                ) in reference_results.items():
-                    log_reference_metrics(
-                        logger,
-                        opponent=opponent,
-                        report=reference_report,
-                        iteration=iteration,
-                        step=global_step,
-                    )
-                    global_step += 1
-                    logger.log_artifact(
-                        f"{opponent} reference evaluation",
-                        str(reference_path),
-                    )
+                log_reference_metrics(
+                    logger,
+                    opponent="bitmatrix",
+                    report=reference_report,
+                    iteration=iteration,
+                    step=global_step,
+                )
+                global_step += 1
+                logger.log_artifact(
+                    "bitmatrix reference evaluation",
+                    str(reference_path),
+                )
 
             logger.log_artifact("checkpoint", str(checkpoint_path))
             logger.log_artifact("model", str(next_model_path))

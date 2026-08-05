@@ -181,7 +181,7 @@ def log_hyperparameters(
     # inherited from self-play/promotion to keep the public configuration small.
     logger.log_param("reference_eval_enabled", reference_config["enabled"])
     logger.log_param("reference_games", reference_config["games"])
-    logger.log_param("reference_opponents", "random,alphabeta,bitmatrix")
+    logger.log_param("reference_opponents", "bitmatrix")
 
     # Candidate promotion parameters
     logger.log_param("promotion_enabled", promotion_config["enabled"])

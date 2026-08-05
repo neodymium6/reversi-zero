@@ -16,7 +16,7 @@ from reversi_zero_trainer.train_main import (
     compose_run_config,
     default_run_dir,
     evaluate_promotion_candidate,
-    evaluate_reference_opponents,
+    evaluate_bitmatrix_reference,
     finalize_candidate,
     prepare_run,
     promotion_is_accepted,
@@ -269,9 +269,7 @@ def test_evaluate_promotion_candidate_persists_decision(tmp_path, monkeypatch):
     assert stored["summary"]["promotion_accepted"] is True
 
 
-def test_reference_opponents_share_openings_and_training_search_budget(
-    tmp_path, monkeypatch
-):
+def test_bitmatrix_reference_uses_training_search_budget(tmp_path, monkeypatch):
     model = tmp_path / "model.pt"
     model.touch()
     evaluations_dir = tmp_path / "evaluations"
@@ -280,15 +278,8 @@ def test_reference_opponents_share_openings_and_training_search_budget(
 
     def fake_evaluation(args):
         calls.append(args)
-        opponent = (
-            "alphabeta"
-            if args.reference_alphabeta
-            else "bitmatrix"
-            if args.reference_bitmatrix
-            else "random"
-        )
         return {
-            "reference": {"type": opponent},
+            "reference": {"type": "bitmatrix"},
             "summary": {
                 "score": 0.5,
                 "score_interval_95": [0.4, 0.6],
@@ -299,7 +290,7 @@ def test_reference_opponents_share_openings_and_training_search_budget(
         }
 
     monkeypatch.setattr(train_main, "run_model_evaluation", fake_evaluation)
-    results = evaluate_reference_opponents(
+    report, report_path = evaluate_bitmatrix_reference(
         model_path=model,
         evaluations_dir=evaluations_dir,
         config=RunConfig(
@@ -314,21 +305,22 @@ def test_reference_opponents_share_openings_and_training_search_budget(
         torch_threads=3,
     )
 
-    assert list(results) == ["random", "alphabeta", "bitmatrix"]
-    assert [call.openings_from for call in calls] == [
-        None,
-        evaluations_dir / "reference_random_iter_2.json",
-        evaluations_dir / "reference_random_iter_2.json",
-    ]
-    for call in calls:
-        assert call.challenger == model
-        assert call.num_openings == 6
-        assert call.opening_plies == 6
-        assert call.seed == 10
-        assert call.simulations == 50
-        assert call.challenger_expansion_batch_size == 2
-        assert call.torch_threads == 3
-    assert all(path.is_file() for _, path in results.values())
+    assert report["reference"]["type"] == "bitmatrix"
+    assert report_path == evaluations_dir / "reference_bitmatrix_iter_2.json"
+    assert report_path.is_file()
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.challenger == model
+    assert call.reference_bitmatrix
+    assert not call.reference_alphabeta
+    assert not call.reference_random
+    assert call.openings_from is None
+    assert call.num_openings == 6
+    assert call.opening_plies == 6
+    assert call.seed == 10
+    assert call.simulations == 50
+    assert call.challenger_expansion_batch_size == 2
+    assert call.torch_threads == 3
 
 
 def test_finalize_candidate_promotes_candidate_files(tmp_path):
