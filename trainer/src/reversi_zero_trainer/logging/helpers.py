@@ -103,6 +103,7 @@ def log_hyperparameters(
     logger.log_param("train_value_loss_weight", train_config.value_loss_weight)
 
     # Model parameters
+    logger.log_param("model_type", model_config["type"])
     logger.log_param("model_channels", model_config["channels"])
     logger.log_param("model_num_blocks", model_config["num_blocks"])
 
@@ -118,6 +119,7 @@ def log_hyperparameters(
     logger.log_param("arena_random_temperature", arena_config["random_temperature"])
 
     # Paths
+    logger.log_param("run_dir", str(paths["run_dir"]))
     logger.log_param("data_base_dir", str(paths["data_base_dir"]))
     logger.log_param("models_dir", str(paths["models_dir"]))
     logger.log_param("checkpoint_dir", str(paths["checkpoint_dir"]))

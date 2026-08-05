@@ -93,8 +93,13 @@ impl<M: PolicyValueModel + Send + Sync + 'static> PolicyValueModel for BatchingM
         } else {
             let (resp_tx, resp_rx) = bounded::<Result<(Tensor, Tensor), tch::TchError>>(1);
 
+            // Preserve the public model contract: a 4D batched input must
+            // produce batched outputs even when B == 1. Worker responses are
+            // intentionally unbatched so they can be reassembled by callers.
+            let preserve_batch_dim = x.dim() == 4;
+
             // Normalize to 3D before sending to worker to avoid 5D stacks.
-            let input = if x.dim() == 4 && x.size()[0] == 1 {
+            let input = if preserve_batch_dim && x.size()[0] == 1 {
                 x.squeeze_dim(0)
             } else {
                 x.shallow_clone()
@@ -105,9 +110,15 @@ impl<M: PolicyValueModel + Send + Sync + 'static> PolicyValueModel for BatchingM
                 .send(BatchWork { input, resp_tx })
                 .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?;
 
-            resp_rx
+            let (policy, value) = resp_rx
                 .recv()
-                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))?
+                .map_err(|_| tch::TchError::Kind("Batching worker stopped".into()))??;
+
+            if preserve_batch_dim {
+                Ok((policy.unsqueeze(0), value.unsqueeze(0)))
+            } else {
+                Ok((policy, value))
+            }
         }
     }
 
@@ -228,8 +239,8 @@ mod tests {
 
         for h in handles {
             let (policy, value) = h.join().unwrap().unwrap();
-            assert_eq!(policy.size(), [64]);
-            assert_eq!(value.numel(), 1, "expected scalar value tensor");
+            assert_eq!(policy.size(), [1, 64]);
+            assert_eq!(value.size(), [1, 1]);
         }
     }
 }

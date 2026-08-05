@@ -1,9 +1,125 @@
 use anyhow::Result;
 use ndarray::{concatenate, Array, Array1, Array2, Array4, Axis};
 use ndarray_npy::{read_npy, write_npy};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::data::TrainingExample;
+
+struct DatasetTransactionPaths {
+    final_paths: [PathBuf; 3],
+    next_paths: [PathBuf; 3],
+    backup_paths: [PathBuf; 3],
+    marker_path: PathBuf,
+}
+
+impl DatasetTransactionPaths {
+    fn new(dir: &Path) -> Self {
+        Self {
+            final_paths: [
+                dir.join("states.npy"),
+                dir.join("policies.npy"),
+                dir.join("values.npy"),
+            ],
+            next_paths: [
+                dir.join(".states.npy.next"),
+                dir.join(".policies.npy.next"),
+                dir.join(".values.npy.next"),
+            ],
+            backup_paths: [
+                dir.join(".states.npy.backup"),
+                dir.join(".policies.npy.backup"),
+                dir.join(".values.npy.backup"),
+            ],
+            marker_path: dir.join(".append-transaction"),
+        }
+    }
+}
+
+fn remove_files_if_present(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Recover the old complete dataset if a previous three-file commit was interrupted.
+fn recover_dataset_transaction(paths: &DatasetTransactionPaths) -> Result<()> {
+    if !paths.marker_path.exists() {
+        remove_files_if_present(&paths.next_paths)?;
+        remove_files_if_present(&paths.backup_paths)?;
+        return Ok(());
+    }
+
+    let marker = std::fs::read_to_string(&paths.marker_path)?;
+    match marker.trim() {
+        "existing" => {
+            if paths.backup_paths.iter().any(|path| !path.is_file()) {
+                anyhow::bail!("Cannot recover interrupted dataset transaction: backup is missing");
+            }
+
+            // Keep every backup until restoration is fully committed, so this
+            // operation can itself be retried after interruption.
+            remove_files_if_present(&paths.next_paths)?;
+            for ((backup, next), final_path) in paths
+                .backup_paths
+                .iter()
+                .zip(paths.next_paths.iter())
+                .zip(paths.final_paths.iter())
+            {
+                std::fs::hard_link(backup, next)?;
+                std::fs::rename(next, final_path)?;
+            }
+        }
+        "new" => {
+            remove_files_if_present(&paths.final_paths)?;
+            remove_files_if_present(&paths.next_paths)?;
+        }
+        other => anyhow::bail!("Unknown dataset transaction marker: {other:?}"),
+    }
+
+    std::fs::remove_file(&paths.marker_path)?;
+    remove_files_if_present(&paths.backup_paths)?;
+    Ok(())
+}
+
+fn commit_dataset_transaction(
+    paths: &DatasetTransactionPaths,
+    had_existing_data: bool,
+) -> Result<()> {
+    if had_existing_data {
+        for (final_path, backup) in paths.final_paths.iter().zip(paths.backup_paths.iter()) {
+            if let Err(error) = std::fs::hard_link(final_path, backup) {
+                remove_files_if_present(&paths.next_paths)?;
+                remove_files_if_present(&paths.backup_paths)?;
+                return Err(error.into());
+            }
+        }
+    }
+
+    let marker = if had_existing_data { "existing" } else { "new" };
+    if let Err(error) = std::fs::write(&paths.marker_path, marker) {
+        remove_files_if_present(&paths.next_paths)?;
+        remove_files_if_present(&paths.backup_paths)?;
+        return Err(error.into());
+    }
+
+    for (next, final_path) in paths.next_paths.iter().zip(paths.final_paths.iter()) {
+        if let Err(error) = std::fs::rename(next, final_path) {
+            recover_dataset_transaction(paths)?;
+            return Err(error.into());
+        }
+    }
+
+    // Removing the marker is the commit point. Backups are cleanup-only after it.
+    if let Err(error) = std::fs::remove_file(&paths.marker_path) {
+        recover_dataset_transaction(paths)?;
+        return Err(error.into());
+    }
+    remove_files_if_present(&paths.backup_paths)?;
+    Ok(())
+}
 
 /// Save training data to NPY files
 ///
@@ -100,9 +216,21 @@ pub fn append_training_data_to_dir(examples: &[TrainingExample], dir: &str) -> R
     // Create directory if it doesn't exist
     std::fs::create_dir_all(dir)?;
 
-    let states_path = Path::new(dir).join("states.npy");
-    let policies_path = Path::new(dir).join("policies.npy");
-    let values_path = Path::new(dir).join("values.npy");
+    let transaction_paths = DatasetTransactionPaths::new(Path::new(dir));
+    recover_dataset_transaction(&transaction_paths)?;
+    let [states_path, policies_path, values_path] = &transaction_paths.final_paths;
+
+    let existing_file_count = transaction_paths
+        .final_paths
+        .iter()
+        .filter(|path| path.is_file())
+        .count();
+    if existing_file_count != 0 && existing_file_count != transaction_paths.final_paths.len() {
+        anyhow::bail!(
+            "Incomplete training dataset in {dir}: expected all of states.npy, policies.npy, and values.npy"
+        );
+    }
+    let had_existing_data = existing_file_count == transaction_paths.final_paths.len();
 
     // Prepare new data arrays
     let new_states: Vec<f32> = examples
@@ -123,31 +251,46 @@ pub fn append_training_data_to_dir(examples: &[TrainingExample], dir: &str) -> R
     let new_values_array: Array1<f32> = Array::from_vec(new_values);
 
     // Check if files exist and concatenate if they do
-    let final_states = if states_path.exists() {
-        let existing: Array4<f32> = read_npy(&states_path)?;
+    let final_states = if had_existing_data {
+        let existing: Array4<f32> = read_npy(states_path)?;
         concatenate(Axis(0), &[existing.view(), new_states_array.view()])?
     } else {
         new_states_array
     };
 
-    let final_policies = if policies_path.exists() {
-        let existing: Array2<f32> = read_npy(&policies_path)?;
+    let final_policies = if had_existing_data {
+        let existing: Array2<f32> = read_npy(policies_path)?;
         concatenate(Axis(0), &[existing.view(), new_policies_array.view()])?
     } else {
         new_policies_array
     };
 
-    let final_values = if values_path.exists() {
-        let existing: Array1<f32> = read_npy(&values_path)?;
+    let final_values = if had_existing_data {
+        let existing: Array1<f32> = read_npy(values_path)?;
         concatenate(Axis(0), &[existing.view(), new_values_array.view()])?
     } else {
         new_values_array
     };
 
-    // Write concatenated data
-    write_npy(&states_path, &final_states)?;
-    write_npy(&policies_path, &final_policies)?;
-    write_npy(&values_path, &final_values)?;
+    if final_states.len_of(Axis(0)) != final_policies.len_of(Axis(0))
+        || final_states.len_of(Axis(0)) != final_values.len_of(Axis(0))
+    {
+        anyhow::bail!("Training dataset arrays have mismatched sample counts");
+    }
+
+    // Write the complete next generation before replacing any live file.
+    let write_result: Result<()> = (|| {
+        write_npy(&transaction_paths.next_paths[0], &final_states)?;
+        write_npy(&transaction_paths.next_paths[1], &final_policies)?;
+        write_npy(&transaction_paths.next_paths[2], &final_values)?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        remove_files_if_present(&transaction_paths.next_paths)?;
+        return Err(error);
+    }
+
+    commit_dataset_transaction(&transaction_paths, had_existing_data)?;
 
     Ok(())
 }
@@ -243,6 +386,18 @@ mod tests {
     use super::*;
     use ndarray_npy::read_npy;
     use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "reversi-zero-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn test_save_and_load_training_data() {
@@ -287,5 +442,68 @@ mod tests {
         let examples: Vec<TrainingExample> = vec![];
         let result = save_training_data(&examples, "test");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_append_to_dir_is_transactional_and_appends() {
+        let dir = unique_temp_dir("append");
+        let dir_str = dir.to_str().unwrap();
+        let first = [TrainingExample::new(vec![1.0; 192], vec![0.5; 64], 1.0)];
+        let second = [TrainingExample::new(vec![0.0; 192], vec![0.1; 64], -1.0)];
+
+        append_training_data_to_dir(&first, dir_str).unwrap();
+        append_training_data_to_dir(&second, dir_str).unwrap();
+
+        let states: Array4<f32> = read_npy(dir.join("states.npy")).unwrap();
+        let policies: Array2<f32> = read_npy(dir.join("policies.npy")).unwrap();
+        let values: Array1<f32> = read_npy(dir.join("values.npy")).unwrap();
+        assert_eq!(states.shape(), &[2, 3, 8, 8]);
+        assert_eq!(policies.shape(), &[2, 64]);
+        assert_eq!(values.to_vec(), vec![1.0, -1.0]);
+        assert!(!dir.join(".append-transaction").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_append_refuses_partial_existing_dataset() {
+        let dir = unique_temp_dir("partial");
+        fs::create_dir_all(&dir).unwrap();
+        let states = Array4::<f32>::zeros((1, 3, 8, 8));
+        write_npy(dir.join("states.npy"), &states).unwrap();
+        let examples = [TrainingExample::new(vec![1.0; 192], vec![0.5; 64], 1.0)];
+
+        let result = append_training_data_to_dir(&examples, dir.to_str().unwrap());
+
+        assert!(result.is_err());
+        assert!(dir.join("states.npy").is_file());
+        assert!(!dir.join("policies.npy").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_append_recovers_interrupted_existing_transaction() {
+        let dir = unique_temp_dir("recover");
+        let dir_str = dir.to_str().unwrap();
+        let first = [TrainingExample::new(vec![1.0; 192], vec![0.5; 64], 1.0)];
+        append_training_data_to_dir(&first, dir_str).unwrap();
+
+        let paths = DatasetTransactionPaths::new(&dir);
+        for (final_path, backup) in paths.final_paths.iter().zip(paths.backup_paths.iter()) {
+            fs::hard_link(final_path, backup).unwrap();
+        }
+        fs::write(&paths.marker_path, "existing").unwrap();
+        let interrupted_next = dir.join(".interrupted-values.npy");
+        write_npy(&interrupted_next, &Array1::<f32>::from_vec(vec![0.0])).unwrap();
+        fs::rename(interrupted_next, &paths.final_paths[2]).unwrap();
+
+        let second = [TrainingExample::new(vec![0.0; 192], vec![0.1; 64], -1.0)];
+        append_training_data_to_dir(&second, dir_str).unwrap();
+
+        let values: Array1<f32> = read_npy(dir.join("values.npy")).unwrap();
+        assert_eq!(values.to_vec(), vec![1.0, -1.0]);
+        assert!(!paths.marker_path.exists());
+        assert!(paths.backup_paths.iter().all(|path| !path.exists()));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

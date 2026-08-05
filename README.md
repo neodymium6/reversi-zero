@@ -69,35 +69,46 @@ cd trainer
 uv run train
 ```
 
-This runs the full AlphaZero training loop (10 iterations by default):
+This creates a new timestamped directory under `trainer/runs/` and runs the
+full AlphaZero training loop (10 iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 128)
 2. **Neural network training** - 10 epochs per iteration
 3. **Arena evaluation** - Test vs Alpha-Beta and Random players
 
-Training configuration is in `trainer/src/reversi_zero_trainer/train_main.py`.
+Existing run directories are never reused implicitly. To select a stable name:
 
-**Note**: Adjust `factor` variable in `train_main.py` to scale game generation (e.g., `factor=32` → 4,096 games/iteration).
+```bash
+uv run train --run-dir runs/experiment-001
+```
+
+Resume starts after the latest complete checkpoint/model pair. It refuses to
+continue if the next iteration contains ambiguous partial self-play data:
+
+```bash
+uv run train --run-dir runs/experiment-001 --resume
+```
+
+Use `uv run train --help` to configure game counts, MCTS, training, Arena,
+device, and model architecture without editing source code.
 
 ### Training Output
 
 ```
-data/
-├── selfplay_iter_0/    # Self-play data for iteration 0
-│   ├── states.npy      # Board states (N, 3, 8, 8)
-│   ├── policies.npy    # MCTS visit distributions (N, 64)
-│   └── values.npy      # Game outcomes (N,)
-├── selfplay_iter_1/
-└── ...
-
-checkpoints/
-├── checkpoint_iter_0.pt   # Training checkpoint
-├── checkpoint_iter_1.pt
-└── ...
-
-models/
-├── model_iter_0.pt     # TorchScript model (for self-play)
-├── model_iter_1.pt
-└── ...
+runs/<timestamp>/
+├── run_config.json
+├── data/
+│   ├── selfplay_iter_0/
+│   │   ├── states.npy      # Board states (N, 3, 8, 8)
+│   │   ├── policies.npy    # MCTS visit distributions (N, 64)
+│   │   └── values.npy      # Game outcomes (N,)
+│   └── selfplay_iter_1/
+├── checkpoints/
+│   ├── checkpoint_iter_0.pt
+│   └── checkpoint_iter_1.pt
+└── models/ts/
+    ├── model_iter_0.pt     # TorchScript model for self-play
+    ├── model_iter_1.pt
+    └── model_final.pt
 ```
 
 ## Key Features

@@ -401,7 +401,12 @@ class AlphaZeroTrainer:
             "config": self.config,
         }
 
-        torch.save(checkpoint, checkpoint_path)  # nosec B614
+        next_path = checkpoint_path.with_name(f".{checkpoint_path.name}.next")
+        try:
+            torch.save(checkpoint, next_path)  # nosec B614
+            next_path.replace(checkpoint_path)
+        finally:
+            next_path.unlink(missing_ok=True)
         return checkpoint_path
 
     def load_checkpoint(self, checkpoint_path: Path | str) -> None:

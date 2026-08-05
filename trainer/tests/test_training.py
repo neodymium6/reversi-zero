@@ -169,6 +169,7 @@ def test_checkpoint_save_and_load(dummy_training_data):
         )
 
         assert checkpoint_path.exists()
+        assert not (Path(tmpdir) / ".test_checkpoint.pt.next").exists()
 
         # Create new trainer and load checkpoint
         new_model = DummyReversiNet()
