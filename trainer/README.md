@@ -39,6 +39,19 @@ Passing an existing directory without `--resume` is an error.
 
 See `../scripts/train --help` for all configuration options.
 
+Evaluate a trained snapshot against its initial model with fixed paired
+openings:
+
+```bash
+../scripts/evaluate \
+  --challenger runs/experiment-001/models/ts/model_iter_2.pt \
+  --reference-model runs/experiment-001/models/ts/model_iter_0.pt \
+  --output runs/experiment-001/evaluations/iter2-vs-iter0.json
+```
+
+Use `../scripts/evaluate --help` for fixed Alpha-Beta/Random references,
+opening-suite reuse, search settings, and promotion thresholds.
+
 Self-play data is written as a recoverable three-file transaction. If a write
 is interrupted, the next append restores the previous complete dataset before
 continuing. Checkpoints and TorchScript models are also replaced atomically.

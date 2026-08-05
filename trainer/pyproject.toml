@@ -21,6 +21,7 @@ reversi-zero-rs = { path = "../agent/crates/reversi_zero_rs" }
 
 [project.scripts]
 train = "reversi_zero_trainer.train_main:main"
+evaluate-models = "reversi_zero_trainer.evaluate_main:main"
 
 [dependency-groups]
 dev = [

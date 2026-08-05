@@ -17,6 +17,7 @@ from pathlib import Path
 
 import torch
 from reversi_zero_rs import MctsConfigArgs, MctsPlayer
+from reversi_zero_trainer.openings import OpeningController
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Sampling temperature (0.0 for argmax, recommended for evaluation)",
     )
+    parser.add_argument(
+        "--openings-file",
+        type=Path,
+        help="Optional fixed opening suite used by paired Arena evaluation",
+    )
     return parser.parse_args()
 
 
@@ -69,6 +75,7 @@ def main() -> None:
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
     player = MctsPlayer(str(model_path), device=args.device, mcts=mcts_args)
     color = args.color.upper()
+    openings = OpeningController(args.openings_file) if args.openings_file else None
 
     for line in sys.stdin:
         board_str = line.strip()
@@ -79,7 +86,9 @@ def main() -> None:
             continue
 
         try:
-            mv = player.select_move(board_str, color)
+            mv = openings.select_forced_move(board_str, color) if openings else None
+            if mv is None:
+                mv = player.select_move(board_str, color)
         except Exception as exc:  # pragma: no cover - fail fast in Arena
             print(exc, file=sys.stderr, flush=True)
             sys.exit(1)

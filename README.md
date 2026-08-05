@@ -122,6 +122,35 @@ runs/<timestamp>/
     └── model_final.pt
 ```
 
+### Evaluate Model Strength
+
+Compare two TorchScript models with fixed openings and automatic color swaps:
+
+```bash
+./scripts/evaluate \
+  --challenger trainer/runs/experiment-001/models/ts/model_iter_2.pt \
+  --reference-model trainer/runs/experiment-001/models/ts/model_iter_0.pt \
+  --output trainer/runs/experiment-001/evaluations/iter2-vs-iter0.json
+```
+
+Each opening is played twice with colors swapped. Evaluation uses
+`temperature=0`, reports the score `(wins + 0.5 * draws) / games`, and writes
+an approximate 95% confidence interval. The report contains the exact opening
+suite and can be reused in another comparison:
+
+```bash
+./scripts/evaluate \
+  --challenger path/to/challenger.pt \
+  --reference-alphabeta \
+  --openings-from path/to/previous-evaluation.json \
+  --output path/to/alphabeta-evaluation.json
+```
+
+The challenger is marked statistically stronger when its score reaches the
+promotion threshold (55% by default) and the confidence interval lower bound
+is above 50%. Random and Alpha-Beta references are also available via
+`--reference-random` and `--reference-alphabeta`.
+
 ## Key Features
 
 ### MCTS Implementation
