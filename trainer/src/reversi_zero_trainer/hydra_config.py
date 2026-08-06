@@ -57,7 +57,7 @@ class HardwareSettings:
 
 @dataclass
 class SelfPlaySettings:
-    games_per_iteration: int = 128
+    games_per_iteration: int = 512
     report_interval: int | None = None
     batch_size: int | None = None
     game_concurrency: int | None = None

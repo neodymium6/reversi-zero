@@ -88,7 +88,7 @@ the environment wrapper:
 
 This creates a new timestamped directory under `trainer/runs/` and runs the
 full AlphaZero training loop (10 iterations by default):
-1. **Self-play generation** - Configurable games per iteration (default: 128)
+1. **Self-play generation** - Configurable games per iteration (default: 512)
 2. **Neural network training** - 1 epoch per iteration
 3. **Candidate promotion** - Replace the incumbent only after a paired direct match
 4. **Reference evaluation** - Test the selected incumbent against BitMatrix
@@ -208,7 +208,7 @@ Key parameters in `train_main.py`:
 
 ```python
 # Game generation
-selfplay_games_per_iter = 128 * factor    # Games per iteration
+selfplay_games_per_iter = 512 * factor    # Games per iteration
 selfplay_batch_size = 32                   # CPU default; 128 on CUDA
 selfplay_game_concurrency = 16             # CPU maximum; 32 on CUDA
 selfplay_num_simulations = 100             # MCTS simulations per move

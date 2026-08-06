@@ -57,7 +57,7 @@ class RunConfig:
     seed: int = 0
     torch_threads: int | None = None
 
-    selfplay_games_per_iter: int = 128
+    selfplay_games_per_iter: int = 512
     selfplay_report_interval: int | None = None
     selfplay_batch_size: int | None = None
     selfplay_game_concurrency: int | None = None
