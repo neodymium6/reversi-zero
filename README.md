@@ -231,6 +231,7 @@ replay_window = 5                          # Recent self-play iterations to comb
 symmetry_augmentation = 8                  # Lazy D4 multiplier; eval stays unaugmented
 dtype = "auto"                             # BF16 on supported CUDA, otherwise FP32
 learning_rate = 0.001                      # Adam learning rate
+lr_schedule = "constant"                   # Or "wsd" for warmup/stable/linear decay
 weight_decay = 1e-4                        # L2 regularization
 ```
 

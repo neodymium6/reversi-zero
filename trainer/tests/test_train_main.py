@@ -110,6 +110,7 @@ def test_hydra_config_maps_training_options():
             "run.seed=123",
             "selfplay.games_per_iteration=16",
             "training.epochs=3",
+            "training.lr_schedule=wsd",
             "training.symmetry_augmentation=4",
             "training.replay_window=7",
             "promotion.openings=12",
@@ -131,6 +132,7 @@ def test_hydra_config_maps_training_options():
     assert config.seed == 123
     assert config.selfplay_games_per_iter == 16
     assert config.train_num_epochs == 3
+    assert config.train_lr_schedule == "wsd"
     assert config.train_symmetry_augmentation == 4
     assert config.train_replay_window == 7
     assert config.promotion_num_openings == 12
@@ -194,6 +196,7 @@ def test_hydra_defaults_use_160_game_score_only_promotion_gate():
         "model.type=other",
         "training.symmetry_augmentation=3",
         "training.epochs=abc",
+        "training.lr_schedule=cyclic",
         "reference.enabled=maybe",
         "selfplay.simmulations=10",
     ],
@@ -388,12 +391,18 @@ def test_finalize_candidate_promotes_candidate_files(tmp_path):
     assert not candidate_checkpoint.exists()
 
 
-def test_finalize_candidate_restores_incumbent_and_optimizer(tmp_path):
+def test_finalize_candidate_restores_incumbent_optimizer_and_scheduler(tmp_path):
     trainer = AlphaZeroTrainer(
         model=DummyReversiNet(),
-        config=TrainingConfig(device="cpu", checkpoint_dir=tmp_path / "checkpoints"),
+        config=TrainingConfig(
+            device="cpu",
+            checkpoint_dir=tmp_path / "checkpoints",
+            lr_schedule="wsd",
+            lr_schedule_iterations=10,
+        ),
     )
     snapshot = capture_trainer_snapshot(trainer)
+    expected_scheduler_state = snapshot.lr_scheduler_state_dict
     expected_parameters = {
         name: parameter.detach().clone()
         for name, parameter in trainer.model.named_parameters()
@@ -403,6 +412,9 @@ def test_finalize_candidate_restores_incumbent_and_optimizer(tmp_path):
     policy, value = trainer.model(inputs)
     (policy.sum() + value.sum()).backward()
     trainer.optimizer.step()
+    assert trainer.lr_scheduler is not None
+    trainer.lr_scheduler.begin_iteration(5, 2)
+    trainer.lr_scheduler.step()
     assert trainer.optimizer.state_dict()["state"]
 
     incumbent_model = tmp_path / "incumbent.pt"
@@ -428,6 +440,7 @@ def test_finalize_candidate_restores_incumbent_and_optimizer(tmp_path):
     assert candidate_checkpoint.exists()
     assert checkpoint.exists()
     assert trainer.optimizer.state_dict()["state"] == {}
+    assert trainer.lr_scheduler.state_dict() == expected_scheduler_state
     for name, parameter in trainer.model.named_parameters():
         assert torch.equal(parameter, expected_parameters[name])
 

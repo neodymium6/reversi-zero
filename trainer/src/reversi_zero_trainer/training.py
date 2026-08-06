@@ -4,7 +4,7 @@ AlphaZero training loop implementation.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator, Literal, Sequence
+from typing import Any, Generator, Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -20,6 +20,91 @@ from reversi_zero_trainer.data import (
 
 TrainingDataSource = Path | str | Sequence[Path | str]
 
+WSD_WARMUP_FRACTION = 0.02
+WSD_DECAY_FRACTION = 0.15
+WSD_MIN_LR_RATIO = 0.01
+
+
+class WSDScheduler:
+    """Warmup-stable-decay schedule over the progress of a complete run."""
+
+    def __init__(self, optimizer: Optimizer, total_iterations: int) -> None:
+        if total_iterations <= 0:
+            raise ValueError("total_iterations must be > 0")
+        self.optimizer = optimizer
+        self.total_iterations = total_iterations
+        self.base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+        self.iteration = 0
+        self.steps_in_iteration = 1
+        self.step_in_iteration = 0
+        self._apply_progress(0.0)
+
+    @staticmethod
+    def factor(progress: float) -> float:
+        """Return the LR multiplier at normalized run progress."""
+        progress = min(max(progress, 0.0), 1.0)
+        if progress < WSD_WARMUP_FRACTION:
+            warmup_progress = progress / WSD_WARMUP_FRACTION
+            return WSD_MIN_LR_RATIO + (1.0 - WSD_MIN_LR_RATIO) * warmup_progress
+
+        decay_start = 1.0 - WSD_DECAY_FRACTION
+        if progress <= decay_start:
+            return 1.0
+
+        decay_progress = (progress - decay_start) / WSD_DECAY_FRACTION
+        return 1.0 - (1.0 - WSD_MIN_LR_RATIO) * decay_progress
+
+    def _apply_progress(self, progress: float) -> None:
+        factor = self.factor(progress)
+        for group, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
+            group["lr"] = base_lr * factor
+
+    def begin_iteration(self, iteration: int, steps_in_iteration: int) -> None:
+        """Start one training iteration with a known number of optimizer steps."""
+        if not 0 <= iteration < self.total_iterations:
+            raise ValueError("iteration must be within the configured run")
+        if steps_in_iteration <= 0:
+            raise ValueError("steps_in_iteration must be > 0")
+        self.iteration = iteration
+        self.steps_in_iteration = steps_in_iteration
+        self.step_in_iteration = 0
+        self._apply_progress(iteration / self.total_iterations)
+
+    def step(self) -> None:
+        """Advance the schedule after one optimizer step."""
+        self.step_in_iteration += 1
+        progress = (
+            self.iteration + self.step_in_iteration / self.steps_in_iteration
+        ) / self.total_iterations
+        self._apply_progress(progress)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "total_iterations": self.total_iterations,
+            "base_lrs": self.base_lrs,
+            "iteration": self.iteration,
+            "steps_in_iteration": self.steps_in_iteration,
+            "step_in_iteration": self.step_in_iteration,
+            "last_lrs": [float(group["lr"]) for group in self.optimizer.param_groups],
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        stored_total = int(state_dict["total_iterations"])
+        if stored_total != self.total_iterations:
+            raise ValueError(
+                "WSD total_iterations mismatch: "
+                f"checkpoint={stored_total}, configured={self.total_iterations}"
+            )
+        self.base_lrs = [float(lr) for lr in state_dict["base_lrs"]]
+        self.iteration = int(state_dict["iteration"])
+        self.steps_in_iteration = int(state_dict["steps_in_iteration"])
+        self.step_in_iteration = int(state_dict["step_in_iteration"])
+        last_lrs = [float(lr) for lr in state_dict["last_lrs"]]
+        if len(last_lrs) != len(self.optimizer.param_groups):
+            raise ValueError("WSD optimizer parameter group count mismatch")
+        for group, learning_rate in zip(self.optimizer.param_groups, last_lrs):
+            group["lr"] = learning_rate
+
 
 @dataclass
 class TrainingConfig:
@@ -30,6 +115,8 @@ class TrainingConfig:
     num_workers: int = 4
     num_epochs: int = 1
     learning_rate: float = 0.001
+    lr_schedule: Literal["constant", "wsd"] = "constant"
+    lr_schedule_iterations: int | None = None
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
@@ -48,6 +135,10 @@ class TrainingConfig:
             raise ValueError("symmetry_augmentation must be one of 1, 2, 4, or 8")
         if self.dtype == "bfloat16" and self.device != "cuda":
             raise ValueError("bfloat16 training requires CUDA")
+        if self.lr_schedule == "wsd" and (
+            self.lr_schedule_iterations is None or self.lr_schedule_iterations <= 0
+        ):
+            raise ValueError("WSD requires lr_schedule_iterations > 0")
         self.checkpoint_dir = Path(self.checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +176,12 @@ class AlphaZeroTrainer:
             )
         else:
             self.optimizer = optimizer
+
+        self.lr_scheduler = (
+            WSDScheduler(self.optimizer, config.lr_schedule_iterations)
+            if config.lr_schedule == "wsd" and config.lr_schedule_iterations is not None
+            else None
+        )
 
         # Training state (persists across multiple train() calls)
         self.batch_step = 0  # Total number of batches processed
@@ -203,6 +300,8 @@ class AlphaZeroTrainer:
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
 
             # Accumulate metrics
             total_loss_sum += total_loss.item()
@@ -305,6 +404,11 @@ class AlphaZeroTrainer:
             "batch_step": self.batch_step,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "lr_scheduler_state_dict": (
+                self.lr_scheduler.state_dict()
+                if self.lr_scheduler is not None
+                else None
+            ),
             "config": self.config,
         }
 
@@ -329,6 +433,11 @@ class AlphaZeroTrainer:
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler_state = checkpoint.get("lr_scheduler_state_dict")
+        if scheduler_state is not None:
+            if self.lr_scheduler is None:
+                raise ValueError("Checkpoint uses WSD but trainer does not")
+            self.lr_scheduler.load_state_dict(scheduler_state)
         self.total_epochs_trained = checkpoint["total_epochs_trained"]
         self.batch_step = checkpoint["batch_step"]
 
@@ -339,6 +448,10 @@ class AlphaZeroTrainer:
                 self.config.symmetry_augmentation = 1
             if "dtype" not in vars(self.config):
                 self.config.dtype = "float32"
+            if "lr_schedule" not in vars(self.config):
+                self.config.lr_schedule = "constant"
+            if "lr_schedule_iterations" not in vars(self.config):
+                self.config.lr_schedule_iterations = None
             # Ensure checkpoint_dir is a Path object
             self.config.checkpoint_dir = Path(self.config.checkpoint_dir)
 
@@ -346,6 +459,7 @@ class AlphaZeroTrainer:
         self,
         data_path: TrainingDataSource,
         num_epochs: int | None = None,
+        schedule_iteration: int | None = None,
     ) -> Generator[dict[str, float], None, None]:
         """
         Run training loop, yielding metrics for each epoch.
@@ -356,6 +470,7 @@ class AlphaZeroTrainer:
         Args:
             data_path: One or more directories containing self-play NPY files
             num_epochs: Number of epochs to train. If None, uses config.num_epochs
+            schedule_iteration: Zero-based run iteration required by WSD
 
         Yields:
             Dictionary containing training and evaluation metrics for each epoch
@@ -374,6 +489,14 @@ class AlphaZeroTrainer:
         if num_epochs is None:
             num_epochs = self.config.num_epochs
 
+        if self.lr_scheduler is not None:
+            if schedule_iteration is None:
+                raise ValueError("WSD training requires schedule_iteration")
+            self.lr_scheduler.begin_iteration(
+                schedule_iteration,
+                len(training_dataloader) * num_epochs,
+            )
+
         for epoch in range(num_epochs):
             # Train one epoch
             train_metrics = self.train_epoch(training_dataloader)
@@ -387,6 +510,7 @@ class AlphaZeroTrainer:
                 **eval_metrics,
                 "epoch": self.total_epochs_trained,
                 "batch_step": self.batch_step,
+                "learning_rate": float(self.optimizer.param_groups[0]["lr"]),
             }
 
             self.total_epochs_trained += 1

@@ -15,7 +15,14 @@ from reversi_zero_trainer.data import (
     SymmetryAugmentedDataset,
 )
 from reversi_zero_trainer.models.dummy import DummyReversiNet, ResNetReversiNet
-from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
+from reversi_zero_trainer.training import (
+    WSD_DECAY_FRACTION,
+    WSD_MIN_LR_RATIO,
+    WSD_WARMUP_FRACTION,
+    AlphaZeroTrainer,
+    TrainingConfig,
+    WSDScheduler,
+)
 
 
 @pytest.fixture
@@ -158,6 +165,67 @@ def test_trainer_initialization():
 def test_bfloat16_training_config_rejects_cpu():
     with pytest.raises(ValueError, match="bfloat16 training requires CUDA"):
         TrainingConfig(device="cpu", dtype="bfloat16")
+
+
+def test_wsd_schedule_has_warmup_stable_and_decay_phases():
+    assert WSDScheduler.factor(0.0) == pytest.approx(WSD_MIN_LR_RATIO)
+    assert WSDScheduler.factor(WSD_WARMUP_FRACTION) == pytest.approx(1.0)
+    assert WSDScheduler.factor(1.0 - WSD_DECAY_FRACTION) == pytest.approx(1.0)
+    assert WSDScheduler.factor(1.0 - WSD_DECAY_FRACTION / 2) == pytest.approx(
+        (1.0 + WSD_MIN_LR_RATIO) / 2
+    )
+    assert WSDScheduler.factor(1.0 - WSD_DECAY_FRACTION * 0.75) == pytest.approx(
+        1.0 - (1.0 - WSD_MIN_LR_RATIO) * 0.25
+    )
+    assert WSDScheduler.factor(1.0) == pytest.approx(WSD_MIN_LR_RATIO)
+
+
+def test_wsd_requires_run_iteration_count():
+    with pytest.raises(ValueError, match="lr_schedule_iterations"):
+        TrainingConfig(device="cpu", lr_schedule="wsd")
+
+
+def test_wsd_updates_each_optimizer_step(dummy_training_data):
+    config = TrainingConfig(
+        batch_size=25,
+        num_workers=0,
+        symmetry_augmentation=1,
+        learning_rate=0.001,
+        lr_schedule="wsd",
+        lr_schedule_iterations=10,
+        device="cpu",
+    )
+    trainer = AlphaZeroTrainer(model=DummyReversiNet(), config=config)
+    assert trainer.optimizer.param_groups[0]["lr"] == pytest.approx(1e-5)
+
+    metrics = list(
+        trainer.train(
+            data_path=dummy_training_data,
+            num_epochs=1,
+            schedule_iteration=0,
+        )
+    )
+
+    assert trainer.lr_scheduler is not None
+    assert trainer.lr_scheduler.step_in_iteration == 4
+    assert metrics[0]["learning_rate"] == pytest.approx(0.001)
+
+
+def test_wsd_requires_schedule_iteration(dummy_training_data):
+    trainer = AlphaZeroTrainer(
+        model=DummyReversiNet(),
+        config=TrainingConfig(
+            batch_size=25,
+            num_workers=0,
+            symmetry_augmentation=1,
+            lr_schedule="wsd",
+            lr_schedule_iterations=10,
+            device="cpu",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="schedule_iteration"):
+        list(trainer.train(dummy_training_data))
 
 
 def test_training_single_epoch(dummy_training_data):
@@ -319,6 +387,29 @@ def test_checkpoint_save_and_load(dummy_training_data):
 
         assert legacy_trainer.config.symmetry_augmentation == 1
         assert legacy_trainer.config.dtype == "float32"
+
+
+def test_wsd_checkpoint_restores_scheduler_state(dummy_training_data, tmp_path):
+    config = TrainingConfig(
+        batch_size=25,
+        num_workers=0,
+        symmetry_augmentation=1,
+        lr_schedule="wsd",
+        lr_schedule_iterations=10,
+        device="cpu",
+        checkpoint_dir=tmp_path,
+    )
+    trainer = AlphaZeroTrainer(model=DummyReversiNet(), config=config)
+    list(trainer.train(dummy_training_data, schedule_iteration=9))
+    checkpoint_path = trainer.save_checkpoint(9, "wsd.pt")
+
+    restored = AlphaZeroTrainer(model=DummyReversiNet(), config=config)
+    restored.load_checkpoint(checkpoint_path)
+
+    assert restored.lr_scheduler is not None
+    assert trainer.lr_scheduler is not None
+    assert restored.lr_scheduler.state_dict() == trainer.lr_scheduler.state_dict()
+    assert restored.optimizer.param_groups[0]["lr"] == pytest.approx(1e-5)
 
 
 def test_resnet_model():

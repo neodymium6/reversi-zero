@@ -168,6 +168,7 @@ def log_hyperparameters(
     logger.log_param("train_num_epochs", train_config.num_epochs)
     logger.log_param("train_symmetry_augmentation", train_config.symmetry_augmentation)
     logger.log_param("train_learning_rate", train_config.learning_rate)
+    logger.log_param("train_lr_schedule", train_config.lr_schedule)
     logger.log_param("train_weight_decay", train_config.weight_decay)
     logger.log_param("train_policy_loss_weight", train_config.policy_loss_weight)
     logger.log_param("train_value_loss_weight", train_config.value_loss_weight)

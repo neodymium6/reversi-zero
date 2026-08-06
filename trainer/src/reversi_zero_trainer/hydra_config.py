@@ -28,6 +28,11 @@ class TrainingDtype(str, Enum):
     bfloat16 = "bfloat16"
 
 
+class LearningRateSchedule(str, Enum):
+    constant = "constant"
+    wsd = "wsd"
+
+
 class ModelType(str, Enum):
     dummy = "dummy"
     resnet = "resnet"
@@ -75,6 +80,7 @@ class TrainingSettings:
     replay_window: int = 5
     symmetry_augmentation: SymmetryAugmentation = SymmetryAugmentation.eight
     learning_rate: float = 0.001
+    lr_schedule: LearningRateSchedule = LearningRateSchedule.constant
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0

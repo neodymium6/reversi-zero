@@ -73,6 +73,7 @@ class RunConfig:
     train_replay_window: int = 5
     train_symmetry_augmentation: Literal[1, 2, 4, 8] = 8
     train_learning_rate: float = 0.001
+    train_lr_schedule: Literal["constant", "wsd"] = "constant"
     train_weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
@@ -223,10 +224,11 @@ class RunState:
 
 @dataclass(frozen=True)
 class TrainerSnapshot:
-    """Restorable incumbent model and optimizer state."""
+    """Restorable incumbent model, optimizer, and LR scheduler state."""
 
     model_state_dict: dict[str, Any]
     optimizer_state_dict: dict[str, Any]
+    lr_scheduler_state_dict: dict[str, Any] | None
 
 
 def capture_trainer_snapshot(trainer: AlphaZeroTrainer) -> TrainerSnapshot:
@@ -234,6 +236,11 @@ def capture_trainer_snapshot(trainer: AlphaZeroTrainer) -> TrainerSnapshot:
     return TrainerSnapshot(
         model_state_dict=copy.deepcopy(trainer.model.state_dict()),
         optimizer_state_dict=copy.deepcopy(trainer.optimizer.state_dict()),
+        lr_scheduler_state_dict=(
+            copy.deepcopy(trainer.lr_scheduler.state_dict())
+            if trainer.lr_scheduler is not None
+            else None
+        ),
     )
 
 
@@ -243,6 +250,10 @@ def restore_trainer_snapshot(
     """Restore a rejected candidate to the incumbent training state."""
     trainer.model.load_state_dict(snapshot.model_state_dict)
     trainer.optimizer.load_state_dict(snapshot.optimizer_state_dict)
+    if snapshot.lr_scheduler_state_dict is not None:
+        if trainer.lr_scheduler is None:
+            raise ValueError("Snapshot uses WSD but trainer does not")
+        trainer.lr_scheduler.load_state_dict(snapshot.lr_scheduler_state_dict)
 
 
 def promotion_is_accepted(
@@ -449,10 +460,17 @@ def _validate_resume_model_config(config: RunConfig, run_dir: Path) -> None:
         "model_num_blocks",
         "inference_dtype",
         "train_dtype",
+        "train_lr_schedule",
     ):
         stored_value = stored.get(
             key,
-            "float32" if key in {"inference_dtype", "train_dtype"} else None,
+            (
+                "float32"
+                if key in {"inference_dtype", "train_dtype"}
+                else "constant"
+                if key == "train_lr_schedule"
+                else None
+            ),
         )
         requested_value: object
         if key == "inference_dtype":
@@ -465,6 +483,13 @@ def _validate_resume_model_config(config: RunConfig, run_dir: Path) -> None:
             raise RuntimeError(
                 f"Resume configuration mismatch for {key}: "
                 f"stored={stored_value!r}, requested={requested_value!r}"
+            )
+    if config.train_lr_schedule == "wsd":
+        stored_iterations = stored.get("num_iterations")
+        if stored_iterations != config.num_iterations:
+            raise RuntimeError(
+                "WSD resume requires the original num_iterations: "
+                f"stored={stored_iterations!r}, requested={config.num_iterations!r}"
             )
 
 
@@ -616,6 +641,7 @@ def run_config_from_hydra(config: DictConfig) -> RunConfig:
         train_replay_window=typed.training.replay_window,
         train_symmetry_augmentation=typed.training.symmetry_augmentation.value,
         train_learning_rate=typed.training.learning_rate,
+        train_lr_schedule=typed.training.lr_schedule.value,
         train_weight_decay=typed.training.weight_decay,
         policy_loss_weight=typed.training.policy_loss_weight,
         value_loss_weight=typed.training.value_loss_weight,
@@ -680,6 +706,8 @@ def run_training(config: RunConfig) -> None:
         num_epochs=config.train_num_epochs,
         symmetry_augmentation=config.train_symmetry_augmentation,
         learning_rate=config.train_learning_rate,
+        lr_schedule=config.train_lr_schedule,
+        lr_schedule_iterations=config.num_iterations,
         weight_decay=config.train_weight_decay,
         policy_loss_weight=config.policy_loss_weight,
         value_loss_weight=config.value_loss_weight,
@@ -815,6 +843,7 @@ def run_training(config: RunConfig) -> None:
                     config.train_replay_window,
                 ),
                 num_epochs=train_config.num_epochs,
+                schedule_iteration=iteration,
             ):
                 log_training_metrics(logger, epoch_metrics, iteration, global_step)
                 global_step += 1
