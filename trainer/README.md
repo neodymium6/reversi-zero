@@ -66,11 +66,11 @@ Training also uses a rolling window of the five most recent self-play
 iterations by default. Their datasets are lazily concatenated without creating
 merged NPY files. Use `training.replay_window=N` to change the history length.
 
-The learning rate is constant by default. Set `training.lr_schedule=wsd` to
-use a linear warmup for the first 2% of the run, hold the configured learning
-rate through 85%, then linearly decay to 1% of it over the final 15%. WSD is
-updated after every optimizer step and its state is included in checkpoints
-and candidate rollback.
+The learning rate uses WSD by default: a linear warmup for the first 2% of the
+run, the configured learning rate held through 85%, then a linear decay to 1%
+of it over the final 15%. The schedule is updated after every optimizer step
+and its state is included in checkpoints and candidate rollback. Set
+`training.lr_schedule=constant` for the previous behavior.
 
 Use `run.seed=N` to give comparison runs identical PyTorch model initialization
 and training-shuffle seeds. Rust self-play remains stochastic.

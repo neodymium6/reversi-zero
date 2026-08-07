@@ -67,7 +67,7 @@ class SelfPlaySettings:
     batch_size: int | None = None
     game_concurrency: int | None = None
     batch_timeout_ms: int = 1
-    simulations: int = 100
+    simulations: int = 200
     expansion_batch_size: int = 4
     c_puct: float = 3.0
 
@@ -80,7 +80,7 @@ class TrainingSettings:
     replay_window: int = 5
     symmetry_augmentation: SymmetryAugmentation = SymmetryAugmentation.eight
     learning_rate: float = 0.001
-    lr_schedule: LearningRateSchedule = LearningRateSchedule.constant
+    lr_schedule: LearningRateSchedule = LearningRateSchedule.wsd
     weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0

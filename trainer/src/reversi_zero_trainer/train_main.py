@@ -62,7 +62,7 @@ class RunConfig:
     selfplay_batch_size: int | None = None
     selfplay_game_concurrency: int | None = None
     selfplay_batch_timeout_ms: int = 1
-    selfplay_num_simulations: int = 100
+    selfplay_num_simulations: int = 200
     selfplay_expansion_batch_size: int = 4
     selfplay_c_puct: float = 3.0
     inference_dtype: Literal["auto", "float32", "float16"] = "auto"
@@ -73,7 +73,7 @@ class RunConfig:
     train_replay_window: int = 5
     train_symmetry_augmentation: Literal[1, 2, 4, 8] = 8
     train_learning_rate: float = 0.001
-    train_lr_schedule: Literal["constant", "wsd"] = "constant"
+    train_lr_schedule: Literal["constant", "wsd"] = "wsd"
     train_weight_decay: float = 1e-4
     policy_loss_weight: float = 1.0
     value_loss_weight: float = 1.0
