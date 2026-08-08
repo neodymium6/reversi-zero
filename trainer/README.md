@@ -18,19 +18,24 @@ Run training from this directory:
 ../scripts/train
 ```
 
-Each invocation creates an isolated timestamped directory under `runs/`.
-Passing an existing directory without `run.resume=true` is an error.
+Each invocation creates an isolated timestamped directory under
+`runs/<experiment-name>/`. Passing an existing experiment/run pair without
+`run.resume=true` is an error.
 
 ```bash
 # Named run
-../scripts/train run.dir=runs/experiment-001
+../scripts/train run.experiment_name=baseline run.name=experiment-001
 
 # Continue after its latest complete iteration
-../scripts/train run.dir=runs/experiment-001 run.resume=true
+../scripts/train \
+  run.experiment_name=baseline \
+  run.name=experiment-001 \
+  run.resume=true
 
 # Small smoke run
 ../scripts/train \
-  run.dir=runs/smoke \
+  run.experiment_name=smoke \
+  run.name=quick-check \
   run.num_iterations=1 \
   selfplay.games_per_iteration=4 \
   selfplay.simulations=8 \
@@ -40,6 +45,8 @@ Passing an existing directory without `run.resume=true` is an error.
 
 Configuration is composed by Hydra. Select `profile=auto|cpu|gpu` and
 `model=dummy|resnet`, then override individual values with `section.key=value`.
+Set `run.root` or `REVERSI_ZERO_RUN_ROOT` to place the experiment hierarchy on
+another storage root.
 The structured schema rejects unknown keys, invalid types, unsupported devices,
 inference dtypes, model types, and symmetry multipliers before training starts.
 Use `../scripts/train --help` for the complete config and

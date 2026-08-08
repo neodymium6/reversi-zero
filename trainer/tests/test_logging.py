@@ -5,8 +5,10 @@ import pytest
 from reversi_zero_trainer.logging import (
     BaseLogger,
     ConsoleConfig,
+    ListLogger,
     LoggerKind,
     LoggingConfig,
+    MLflowConfig,
     create_logger,
 )
 
@@ -124,6 +126,70 @@ def test_create_logger_no_backends():
 
     with pytest.raises(RuntimeError, match="At least one logger backend"):
         create_logger(config)
+
+
+def test_console_and_mlflow_log_simultaneously(tmp_path, monkeypatch):
+    """A backend list fans every event out to console and MLflow."""
+    from mlflow import MlflowClient
+
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    artifact = tmp_path / "checkpoint.pt"
+    artifact.write_bytes(b"checkpoint")
+    config = LoggingConfig(
+        backends={
+            LoggerKind.CONSOLE: ConsoleConfig(verbose=False),
+            LoggerKind.MLFLOW: MLflowConfig(
+                tracking_uri=tracking_uri,
+                artifact_location=(tmp_path / "artifacts").as_uri(),
+                experiment_name="multi-backend-test",
+                run_name="test-run",
+            ),
+        }
+    )
+
+    with create_logger(config) as logger:
+        assert isinstance(logger, ListLogger)
+        from reversi_zero_trainer.logging.mlflow import MLflowLogger
+
+        mlflow_logger = next(
+            backend for backend in logger.backends if isinstance(backend, MLflowLogger)
+        )
+        batch_calls = []
+        original_log_batch = mlflow_logger.client.log_batch
+
+        def record_log_batch(*args, **kwargs):
+            batch_calls.append((args, kwargs))
+            return original_log_batch(*args, **kwargs)
+
+        monkeypatch.setattr(mlflow_logger.client, "log_batch", record_log_batch)
+        logger.log_params({"batch_size": 64, "epochs": 1})
+        logger.log_metrics({"loss": 0.25, "accuracy": 0.75}, step=3)
+        logger.log_artifact("checkpoint", str(artifact))
+
+        assert len(batch_calls) == 2
+        assert len(batch_calls[0][1]["params"]) == 2
+        assert len(batch_calls[1][1]["metrics"]) == 2
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name("multi-backend-test")
+    assert experiment is not None
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.info.status == "FINISHED"
+    assert run.data.params["batch_size"] == "64"
+    assert run.data.params["epochs"] == "1"
+    assert run.data.metrics["loss"] == pytest.approx(0.25)
+    assert run.data.metrics["accuracy"] == pytest.approx(0.75)
+    artifacts = client.list_artifacts(run.info.run_id, "checkpoint")
+    assert [item.path for item in artifacts] == ["checkpoint/checkpoint.pt"]
+
+
+def test_mlflow_logger_rejects_wrong_config_type():
+    from reversi_zero_trainer.logging.mlflow import MLflowLogger
+
+    with pytest.raises(TypeError, match="MLflowLogger requires MLflowConfig"):
+        MLflowLogger(ConsoleConfig())
 
 
 def test_create_logger_unknown_backend():

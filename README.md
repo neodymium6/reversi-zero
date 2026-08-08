@@ -82,12 +82,18 @@ the environment wrapper:
 
 ### Train a Model
 
+For machine-local storage and MLflow settings, copy `.env.example` to `.env`
+and edit it. `.env` is intentionally excluded from Git; existing process
+environment variables and Hydra command-line overrides take precedence.
+
 ```bash
+cp .env.example .env
 ./scripts/train
 ```
 
-This creates a new timestamped directory under `trainer/runs/` and runs the
-full AlphaZero training loop (10 iterations by default):
+This creates a new timestamped directory under
+`trainer/runs/reversi-zero/` and runs the full AlphaZero training loop (10
+iterations by default):
 1. **Self-play generation** - Configurable games per iteration (default: 512)
 2. **Neural network training** - 1 epoch per iteration
 3. **Candidate promotion** - Replace the incumbent only after a paired direct match
@@ -96,14 +102,17 @@ full AlphaZero training loop (10 iterations by default):
 Existing run directories are never reused implicitly. To select a stable name:
 
 ```bash
-./scripts/train run.dir=runs/experiment-001
+./scripts/train run.experiment_name=baseline run.name=experiment-001
 ```
 
 Resume starts after the latest complete checkpoint/model pair. It refuses to
 continue if the next iteration contains ambiguous partial self-play data:
 
 ```bash
-./scripts/train run.dir=runs/experiment-001 run.resume=true
+./scripts/train \
+  run.experiment_name=baseline \
+  run.name=experiment-001 \
+  run.resume=true
 ```
 
 Training uses Hydra configuration groups and overrides. Use
@@ -113,7 +122,7 @@ Training uses Hydra configuration groups and overrides. Use
 ### Training Output
 
 ```
-runs/<timestamp>/
+runs/<experiment-name>/<run-name>/
 ├── run_config.json
 ├── data/
 │   ├── selfplay_iter_0/

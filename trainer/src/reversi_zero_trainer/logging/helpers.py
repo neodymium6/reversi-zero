@@ -25,16 +25,14 @@ def log_selfplay_stats(
     """
     prefix = f"iter_{iteration}/selfplay"
 
-    # Log all public attributes from SelfPlayStats
+    metrics: dict[str, float] = {}
     for attr_name in dir(stats):
         # Skip private/magic attributes and methods
         if attr_name.startswith("_") or callable(getattr(stats, attr_name)):
             continue
 
-        value = getattr(stats, attr_name)
-        logger.log_metric(
-            f"{prefix}/{attr_name}", float(value), step=step, color="magenta"
-        )
+        metrics[f"{prefix}/{attr_name}"] = float(getattr(stats, attr_name))
+    logger.log_metrics(metrics, step=step, color="magenta")
 
 
 def log_training_metrics(
@@ -53,12 +51,14 @@ def log_training_metrics(
     """
     prefix = f"iter_{iteration}"
 
-    # Log all metrics from the dictionary
-    for metric_name, metric_value in metrics.items():
-        # Metric names already contain the path (e.g., "loss/total", "eval/loss_total", "epoch", etc.)
-        logger.log_metric(
-            f"{prefix}/{metric_name}", float(metric_value), step=step, color="cyan"
-        )
+    logger.log_metrics(
+        {
+            f"{prefix}/{metric_name}": float(metric_value)
+            for metric_name, metric_value in metrics.items()
+        },
+        step=step,
+        color="cyan",
+    )
 
 
 def log_promotion_metrics(
@@ -80,13 +80,14 @@ def log_promotion_metrics(
         "losses": summary["losses"],
         "accepted": float(accepted),
     }
-    for name, value in metrics.items():
-        logger.log_metric(
-            f"iter_{iteration}/promotion/{name}",
-            float(value),
-            step=step,
-            color="green",
-        )
+    logger.log_metrics(
+        {
+            f"iter_{iteration}/promotion/{name}": float(value)
+            for name, value in metrics.items()
+        },
+        step=step,
+        color="green",
+    )
 
 
 def log_reference_metrics(
@@ -107,13 +108,14 @@ def log_reference_metrics(
         "draws": summary["draws"],
         "losses": summary["losses"],
     }
-    for name, value in metrics.items():
-        logger.log_metric(
-            f"iter_{iteration}/reference/{opponent}/{name}",
-            float(value),
-            step=step,
-            color="yellow",
-        )
+    logger.log_metrics(
+        {
+            f"iter_{iteration}/reference/{opponent}/{name}": float(value)
+            for name, value in metrics.items()
+        },
+        step=step,
+        color="yellow",
+    )
 
 
 def log_hyperparameters(
@@ -144,63 +146,47 @@ def log_hyperparameters(
         paths: Dictionary of paths (data_base_dir, models_dir, checkpoint_dir)
         device: Device being used
     """
-    # Global settings
-    logger.log_param("num_iterations", num_iterations)
-    logger.log_param("device", device)
-    logger.log_param("seed", seed)
-    logger.log_param("train_replay_window", replay_window)
-
-    # Self-play parameters
-    logger.log_param("selfplay_games_per_iter", selfplay_config["games_per_iter"])
-    logger.log_param("selfplay_report_interval", selfplay_config["report_interval"])
-    logger.log_param("selfplay_batch_size", selfplay_config["batch_size"])
-    logger.log_param("selfplay_game_concurrency", selfplay_config["game_concurrency"])
-    logger.log_param("selfplay_batch_timeout_ms", selfplay_config["batch_timeout_ms"])
-    logger.log_param(
-        "selfplay_expansion_batch_size", selfplay_config["expansion_batch_size"]
+    logger.log_params(
+        {
+            "num_iterations": num_iterations,
+            "device": device,
+            "seed": seed,
+            "train_replay_window": replay_window,
+            "selfplay_games_per_iter": selfplay_config["games_per_iter"],
+            "selfplay_report_interval": selfplay_config["report_interval"],
+            "selfplay_batch_size": selfplay_config["batch_size"],
+            "selfplay_game_concurrency": selfplay_config["game_concurrency"],
+            "selfplay_batch_timeout_ms": selfplay_config["batch_timeout_ms"],
+            "selfplay_expansion_batch_size": selfplay_config["expansion_batch_size"],
+            "torch_threads": selfplay_config["torch_threads"],
+            "selfplay_num_simulations": selfplay_config["num_simulations"],
+            "train_batch_size": train_config.batch_size,
+            "train_num_workers": train_config.num_workers,
+            "train_num_epochs": train_config.num_epochs,
+            "train_symmetry_augmentation": train_config.symmetry_augmentation,
+            "train_learning_rate": train_config.learning_rate,
+            "train_lr_schedule": train_config.lr_schedule,
+            "train_weight_decay": train_config.weight_decay,
+            "train_policy_loss_weight": train_config.policy_loss_weight,
+            "train_value_loss_weight": train_config.value_loss_weight,
+            "train_dtype": train_config.dtype,
+            "model_type": model_config["type"],
+            "model_channels": model_config["channels"],
+            "model_num_blocks": model_config["num_blocks"],
+            "reference_eval_enabled": reference_config["enabled"],
+            "reference_games": reference_config["games"],
+            "reference_opponents": "bitmatrix",
+            "promotion_enabled": promotion_config["enabled"],
+            "promotion_num_openings": promotion_config["num_openings"],
+            "promotion_opening_plies": promotion_config["opening_plies"],
+            "promotion_mcts_sims": promotion_config["mcts_sims"],
+            "promotion_c_puct": promotion_config["c_puct"],
+            "promotion_expansion_batch_size": promotion_config["expansion_batch_size"],
+            "promotion_threshold": promotion_config["threshold"],
+            "promotion_require_confidence": promotion_config["require_confidence"],
+            "run_dir": str(paths["run_dir"]),
+            "data_base_dir": str(paths["data_base_dir"]),
+            "models_dir": str(paths["models_dir"]),
+            "checkpoint_dir": str(paths["checkpoint_dir"]),
+        }
     )
-    logger.log_param("torch_threads", selfplay_config["torch_threads"])
-    logger.log_param("selfplay_num_simulations", selfplay_config["num_simulations"])
-
-    # Training parameters
-    logger.log_param("train_batch_size", train_config.batch_size)
-    logger.log_param("train_num_workers", train_config.num_workers)
-    logger.log_param("train_num_epochs", train_config.num_epochs)
-    logger.log_param("train_symmetry_augmentation", train_config.symmetry_augmentation)
-    logger.log_param("train_learning_rate", train_config.learning_rate)
-    logger.log_param("train_lr_schedule", train_config.lr_schedule)
-    logger.log_param("train_weight_decay", train_config.weight_decay)
-    logger.log_param("train_policy_loss_weight", train_config.policy_loss_weight)
-    logger.log_param("train_value_loss_weight", train_config.value_loss_weight)
-    logger.log_param("train_dtype", train_config.dtype)
-
-    # Model parameters
-    logger.log_param("model_type", model_config["type"])
-    logger.log_param("model_channels", model_config["channels"])
-    logger.log_param("model_num_blocks", model_config["num_blocks"])
-
-    # Fixed reference evaluation parameters. Search and opening settings are
-    # inherited from self-play/promotion to keep the public configuration small.
-    logger.log_param("reference_eval_enabled", reference_config["enabled"])
-    logger.log_param("reference_games", reference_config["games"])
-    logger.log_param("reference_opponents", "bitmatrix")
-
-    # Candidate promotion parameters
-    logger.log_param("promotion_enabled", promotion_config["enabled"])
-    logger.log_param("promotion_num_openings", promotion_config["num_openings"])
-    logger.log_param("promotion_opening_plies", promotion_config["opening_plies"])
-    logger.log_param("promotion_mcts_sims", promotion_config["mcts_sims"])
-    logger.log_param("promotion_c_puct", promotion_config["c_puct"])
-    logger.log_param(
-        "promotion_expansion_batch_size", promotion_config["expansion_batch_size"]
-    )
-    logger.log_param("promotion_threshold", promotion_config["threshold"])
-    logger.log_param(
-        "promotion_require_confidence", promotion_config["require_confidence"]
-    )
-
-    # Paths
-    logger.log_param("run_dir", str(paths["run_dir"]))
-    logger.log_param("data_base_dir", str(paths["data_base_dir"]))
-    logger.log_param("models_dir", str(paths["models_dir"]))
-    logger.log_param("checkpoint_dir", str(paths["checkpoint_dir"]))

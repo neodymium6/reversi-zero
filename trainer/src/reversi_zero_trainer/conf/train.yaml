@@ -6,6 +6,13 @@ defaults:
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
 
+logging:
+  mlflow:
+    tracking_uri: ${oc.env:MLFLOW_TRACKING_URI,null}
+
+run:
+  root: ${oc.env:REVERSI_ZERO_RUN_ROOT,runs}
+
 hydra:
   run:
     dir: .

@@ -1,6 +1,7 @@
 """Base classes and registry for the logging system."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any
 
 from .config import BaseLoggerConfig, LoggerKind, LoggingConfig
@@ -72,6 +73,21 @@ class BaseLogger(ABC):
         """
         pass
 
+    def log_metrics(
+        self,
+        metrics: Mapping[str, float],
+        step: int | None = None,
+        color: str | None = None,
+    ) -> None:
+        """Log one logical group of metrics."""
+        for name, value in metrics.items():
+            self.log_metric(name, value, step, color)
+
+    def log_params(self, params: Mapping[str, Any]) -> None:
+        """Log one logical group of parameters."""
+        for key, value in params.items():
+            self.log_param(key, value)
+
     @abstractmethod
     def log_artifact(self, name: str, path: str) -> None:
         """Log an artifact (saved file, checkpoint, model, etc).
@@ -122,6 +138,21 @@ class ListLogger(BaseLogger):
         """Log parameter to all backends."""
         for backend in self.backends:
             backend.log_param(key, value)
+
+    def log_metrics(
+        self,
+        metrics: Mapping[str, float],
+        step: int | None = None,
+        color: str | None = None,
+    ) -> None:
+        """Log a metric group to all backends."""
+        for backend in self.backends:
+            backend.log_metrics(metrics, step, color)
+
+    def log_params(self, params: Mapping[str, Any]) -> None:
+        """Log a parameter group to all backends."""
+        for backend in self.backends:
+            backend.log_params(params)
 
     def log_artifact(self, name: str, path: str) -> None:
         """Log artifact to all backends."""

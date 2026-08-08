@@ -38,6 +38,11 @@ class ModelType(str, Enum):
     resnet = "resnet"
 
 
+class LoggingBackend(str, Enum):
+    console = "console"
+    mlflow = "mlflow"
+
+
 class SymmetryAugmentation(int, Enum):
     one = 1
     two = 2
@@ -47,7 +52,9 @@ class SymmetryAugmentation(int, Enum):
 
 @dataclass
 class RunSettings:
-    dir: str | None = None
+    root: str = "runs"
+    experiment_name: str = "reversi-zero"
+    name: str | None = None
     resume: bool = False
     num_iterations: int = 10
     seed: int = 0
@@ -114,6 +121,29 @@ class ModelSettings:
 
 
 @dataclass
+class ConsoleLoggingSettings:
+    verbose: bool = True
+    show_params_table: bool = True
+    show_timestamp: bool = True
+
+
+@dataclass
+class MLflowLoggingSettings:
+    tracking_uri: str | None = None
+    artifact_location: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class LoggingSettings:
+    backends: list[LoggingBackend] = field(
+        default_factory=lambda: [LoggingBackend.console]
+    )
+    console: ConsoleLoggingSettings = field(default_factory=ConsoleLoggingSettings)
+    mlflow: MLflowLoggingSettings = field(default_factory=MLflowLoggingSettings)
+
+
+@dataclass
 class TrainHydraConfig:
     run: RunSettings = field(default_factory=RunSettings)
     hardware: HardwareSettings = field(default_factory=HardwareSettings)
@@ -122,6 +152,7 @@ class TrainHydraConfig:
     reference: ReferenceSettings = field(default_factory=ReferenceSettings)
     promotion: PromotionSettings = field(default_factory=PromotionSettings)
     model: ModelSettings = field(default_factory=ModelSettings)
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
 
 
 def register_train_config() -> None:

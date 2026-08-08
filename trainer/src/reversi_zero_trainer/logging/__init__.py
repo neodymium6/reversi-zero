@@ -1,7 +1,7 @@
 """Logging system for reversi-zero trainer.
 
 This package provides a flexible logging abstraction that supports
-multiple backends (console, ClearML, etc.) through a unified interface.
+multiple backends (console, MLflow, etc.) through a unified interface.
 
 Example:
     >>> from reversi_zero_trainer.logging import (
@@ -23,7 +23,13 @@ Example:
 """
 
 from .base import BaseLogger, ListLogger, create_logger
-from .config import BaseLoggerConfig, ConsoleConfig, LoggerKind, LoggingConfig
+from .config import (
+    BaseLoggerConfig,
+    ConsoleConfig,
+    LoggerKind,
+    LoggingConfig,
+    MLflowConfig,
+)
 from .helpers import (
     log_hyperparameters,
     log_promotion_metrics,
@@ -33,7 +39,7 @@ from .helpers import (
 )
 
 # Import to trigger @register_logger decorators
-from . import console  # noqa: F401
+from . import console, mlflow  # noqa: F401
 
 __all__ = [
     "BaseLogger",
@@ -42,6 +48,7 @@ __all__ = [
     "BaseLoggerConfig",
     "LoggingConfig",
     "ConsoleConfig",
+    "MLflowConfig",
     "LoggerKind",
     "log_hyperparameters",
     "log_promotion_metrics",

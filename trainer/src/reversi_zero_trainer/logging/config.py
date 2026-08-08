@@ -1,7 +1,7 @@
 """Configuration classes for the logging system."""
 
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -9,6 +9,7 @@ class LoggerKind(str, Enum):
     """Enum for logger backend types."""
 
     CONSOLE = "console"
+    MLFLOW = "mlflow"
 
 
 class BaseLoggerConfig(ABC):
@@ -30,6 +31,17 @@ class ConsoleConfig(BaseLoggerConfig):
     verbose: bool = True
     show_params_table: bool = True
     show_timestamp: bool = False
+
+
+@dataclass
+class MLflowConfig(BaseLoggerConfig):
+    """Configuration for an MLflow tracking backend."""
+
+    tracking_uri: str | None = None
+    artifact_location: str | None = None
+    experiment_name: str = "reversi-zero"
+    run_name: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

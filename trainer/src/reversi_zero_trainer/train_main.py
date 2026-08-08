@@ -9,20 +9,23 @@ import os
 import re
 import shutil
 from argparse import Namespace
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
 import hydra
 import torch
+from dotenv import load_dotenv
 from omegaconf import DictConfig
 from reversi_zero_rs import BatchConfigArgs, MctsConfigArgs, SelfPlayStream
 
 from reversi_zero_trainer.logging import (
+    BaseLoggerConfig,
     ConsoleConfig,
     LoggerKind,
     LoggingConfig,
+    MLflowConfig,
     create_logger,
     log_hyperparameters,
     log_promotion_metrics,
@@ -47,10 +50,33 @@ register_train_config()
 
 
 @dataclass(frozen=True)
+class ConsoleLoggerSettings:
+    verbose: bool = True
+    show_params_table: bool = True
+    show_timestamp: bool = True
+
+
+@dataclass(frozen=True)
+class MLflowLoggerSettings:
+    tracking_uri: str | None = None
+    artifact_location: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LoggerSettings:
+    backends: tuple[Literal["console", "mlflow"], ...] = ("console",)
+    console: ConsoleLoggerSettings = field(default_factory=ConsoleLoggerSettings)
+    mlflow: MLflowLoggerSettings = field(default_factory=MLflowLoggerSettings)
+
+
+@dataclass(frozen=True)
 class RunConfig:
     """Configuration for one isolated AlphaZero run."""
 
-    run_dir: Path | None = None
+    run_root: Path = Path("runs")
+    experiment_name: str = "reversi-zero"
+    run_name: str | None = None
     resume: bool = False
     num_iterations: int = 10
     device: Literal["auto", "cuda", "cpu"] = "auto"
@@ -95,6 +121,7 @@ class RunConfig:
     model_type: Literal["dummy", "resnet"] = "dummy"
     model_channels: int = 64
     model_num_blocks: int = 6
+    logging: LoggerSettings = field(default_factory=LoggerSettings)
 
     def report_interval(self) -> int:
         if self.selfplay_report_interval is not None:
@@ -156,6 +183,28 @@ class RunConfig:
         return self.promotion_expansion_batch_size or self.selfplay_expansion_batch_size
 
     def validate(self) -> None:
+        for setting, value in (
+            ("experiment_name", self.experiment_name),
+            ("run_name", self.run_name),
+        ):
+            if value is None:
+                continue
+            if (
+                not value.strip()
+                or value != value.strip()
+                or Path(value).name != value
+                or value in {".", ".."}
+            ):
+                raise ValueError(f"{setting} must be a single non-empty path component")
+        if not self.logging.backends:
+            raise ValueError("At least one logging backend must be selected")
+        unknown_backends = set(self.logging.backends) - {"console", "mlflow"}
+        if unknown_backends:
+            raise ValueError(
+                f"Unknown logging backend(s): {', '.join(sorted(unknown_backends))}"
+            )
+        if len(set(self.logging.backends)) != len(self.logging.backends):
+            raise ValueError("Logging backends must not contain duplicates")
         positive_ints = {
             "num_iterations": self.num_iterations,
             "selfplay_games_per_iter": self.selfplay_games_per_iter,
@@ -411,15 +460,22 @@ def finalize_candidate(
     )
 
 
-def default_run_dir(now: datetime | None = None) -> Path:
-    """Return a unique-by-default run path relative to the current directory."""
-    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
-    return Path("runs") / timestamp
+def default_run_name(now: datetime | None = None) -> str:
+    """Return a unique-by-default name for one training run."""
+    return (now or datetime.now()).strftime("%Y%m%d_%H%M%S_%f")
+
+
+def run_dir_for_config(config: RunConfig, run_name: str | None = None) -> Path:
+    """Resolve the canonical directory for an experiment and run name."""
+    resolved_name = run_name or config.run_name or default_run_name()
+    return (config.run_root / config.experiment_name / resolved_name).resolve()
 
 
 def _config_payload(config: RunConfig, run_dir: Path) -> dict[str, object]:
     payload = asdict(config)
     device = config.resolved_device()
+    payload["run_root"] = str(config.run_root)
+    payload["run_name"] = run_dir.name
     payload["run_dir"] = str(run_dir)
     payload["report_interval"] = config.report_interval()
     payload["torch_threads"] = config.resolved_torch_threads(device)
@@ -529,20 +585,20 @@ def _find_resume_iteration(run_dir: Path) -> tuple[int, Path]:
 def prepare_run(config: RunConfig) -> RunState:
     """Create a new run or validate a resumable existing run."""
     config.validate()
-    run_dir = (config.run_dir or default_run_dir()).resolve()
+    if config.resume and config.run_name is None:
+        raise ValueError("run.resume=true requires an explicit run.name")
+    run_dir = run_dir_for_config(config)
 
     if not config.resume:
         if run_dir.exists():
             raise FileExistsError(
                 f"Run directory already exists: {run_dir}. "
-                "Choose another run.dir or use run.resume=true."
+                "Choose another run.name or use run.resume=true."
             )
         run_dir.mkdir(parents=True)
         _write_run_config(config, run_dir)
         return RunState(run_dir, 0, None)
 
-    if config.run_dir is None:
-        raise ValueError("run.resume=true requires an explicit run.dir")
     if not run_dir.is_dir():
         raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
 
@@ -620,7 +676,9 @@ def run_config_from_hydra(config: DictConfig) -> RunConfig:
     """Convert Hydra's nested application config into the training domain config."""
     typed = materialize_train_config(config)
     return RunConfig(
-        run_dir=Path(typed.run.dir) if typed.run.dir is not None else None,
+        run_root=Path(typed.run.root),
+        experiment_name=typed.run.experiment_name,
+        run_name=typed.run.name,
         resume=typed.run.resume,
         num_iterations=typed.run.num_iterations,
         device=typed.hardware.device.value,
@@ -660,6 +718,19 @@ def run_config_from_hydra(config: DictConfig) -> RunConfig:
         model_type=typed.model.type.value,
         model_channels=typed.model.channels,
         model_num_blocks=typed.model.blocks,
+        logging=LoggerSettings(
+            backends=tuple(backend.value for backend in typed.logging.backends),
+            console=ConsoleLoggerSettings(
+                verbose=typed.logging.console.verbose,
+                show_params_table=typed.logging.console.show_params_table,
+                show_timestamp=typed.logging.console.show_timestamp,
+            ),
+            mlflow=MLflowLoggerSettings(
+                tracking_uri=typed.logging.mlflow.tracking_uri,
+                artifact_location=typed.logging.mlflow.artifact_location,
+                tags=dict(typed.logging.mlflow.tags),
+            ),
+        ),
     )
 
 
@@ -671,6 +742,40 @@ def compose_run_config(overrides: Sequence[str] = ()) -> RunConfig:
     ):
         config = hydra.compose(config_name="train", overrides=list(overrides))
     return run_config_from_hydra(config)
+
+
+def logging_config_for_run(config: RunConfig, run_dir: Path) -> LoggingConfig:
+    """Build every selected logger backend while preserving selection order."""
+    backends: dict[LoggerKind, BaseLoggerConfig] = {}
+    for backend in config.logging.backends:
+        if backend == "console":
+            console = config.logging.console
+            backends[LoggerKind.CONSOLE] = ConsoleConfig(
+                verbose=console.verbose,
+                show_params_table=console.show_params_table,
+                show_timestamp=console.show_timestamp,
+            )
+            continue
+
+        mlflow = config.logging.mlflow
+        tracking_uri = mlflow.tracking_uri
+        if tracking_uri is None:
+            raise ValueError(
+                "MLflow requires a remote tracking URI. Set MLFLOW_TRACKING_URI "
+                "or logging.mlflow.tracking_uri."
+            )
+        tags = dict(mlflow.tags)
+        tags.setdefault("reversi_zero.run_dir", str(run_dir))
+        tags.setdefault("reversi_zero.resume", str(config.resume).lower())
+        backends[LoggerKind.MLFLOW] = MLflowConfig(
+            tracking_uri=tracking_uri,
+            artifact_location=mlflow.artifact_location,
+            experiment_name=config.experiment_name,
+            run_name=run_dir.name,
+            tags=tags,
+        )
+
+    return LoggingConfig(backends=backends)
 
 
 def run_training(config: RunConfig) -> None:
@@ -737,15 +842,7 @@ def run_training(config: RunConfig) -> None:
         trainer.load_checkpoint(state.checkpoint_path)
         trainer.config = train_config
 
-    logging_cfg = LoggingConfig(
-        backends={
-            LoggerKind.CONSOLE: ConsoleConfig(
-                verbose=True,
-                show_params_table=True,
-                show_timestamp=True,
-            ),
-        }
-    )
+    logging_cfg = logging_config_for_run(config, run_dir)
 
     with create_logger(logging_cfg) as logger:
         log_hyperparameters(
@@ -951,10 +1048,22 @@ def run_training(config: RunConfig) -> None:
         logger.log_artifact("final model", str(final_model_path))
 
 
+def load_repository_dotenv(dotenv_path: Path | None = None) -> bool:
+    """Load local defaults without overriding the process environment."""
+    path = dotenv_path or Path(__file__).resolve().parents[3] / ".env"
+    return load_dotenv(dotenv_path=path, override=False)
+
+
 @hydra.main(version_base="1.3", config_path="conf", config_name="train")
-def main(config: DictConfig) -> None:
+def _hydra_main(config: DictConfig) -> None:
     """Compose the Hydra configuration and start training."""
     run_training(run_config_from_hydra(config))
+
+
+def main() -> None:
+    """Load repository-local defaults before Hydra resolves environment values."""
+    load_repository_dotenv()
+    _hydra_main()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 """Tests for safe training run setup and CLI configuration."""
 
 import json
+import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -9,31 +11,52 @@ import torch
 from hydra.errors import ConfigCompositionException
 
 import reversi_zero_trainer.train_main as train_main
+from reversi_zero_trainer.logging import LoggerKind, MLflowConfig
 from reversi_zero_trainer.train_main import (
     RunConfig,
     _Float16InferenceWrapper,
     capture_trainer_snapshot,
     compose_run_config,
-    default_run_dir,
+    default_run_name,
     evaluate_promotion_candidate,
     evaluate_bitmatrix_reference,
     finalize_candidate,
+    logging_config_for_run,
+    load_repository_dotenv,
     prepare_run,
     promotion_is_accepted,
     replay_data_paths,
+    run_dir_for_config,
 )
 from reversi_zero_trainer.models.dummy import DummyReversiNet
 from reversi_zero_trainer.training import AlphaZeroTrainer, TrainingConfig
 
 
-def test_default_run_dir_is_timestamped():
+def test_default_run_name_is_timestamped():
     now = datetime(2026, 8, 5, 10, 40, 30, 123456)
-    assert default_run_dir(now) == Path("runs/20260805_104030_123456")
+    assert default_run_name(now) == "20260805_104030_123456"
+
+
+def test_run_dir_combines_root_experiment_and_run_name(tmp_path):
+    config = RunConfig(
+        run_root=tmp_path,
+        experiment_name="quality-study",
+        run_name="sim400-seed0",
+    )
+
+    assert run_dir_for_config(config) == (tmp_path / "quality-study" / "sim400-seed0")
 
 
 def test_prepare_run_creates_new_isolated_directory(tmp_path):
-    run_dir = tmp_path / "run"
-    state = prepare_run(RunConfig(run_dir=run_dir, device="cpu"))
+    run_dir = tmp_path / "tests" / "run"
+    state = prepare_run(
+        RunConfig(
+            run_root=tmp_path,
+            experiment_name="tests",
+            run_name="run",
+            device="cpu",
+        )
+    )
 
     assert state.run_dir == run_dir.resolve()
     assert state.start_iteration == 0
@@ -57,14 +80,29 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["promotion_require_confidence"] is False
     assert stored["inference_dtype"] == "float32"
     assert stored["train_dtype"] == "float32"
+    assert stored["experiment_name"] == "tests"
+    assert stored["run_name"] == "run"
+    assert stored["run_dir"] == str(run_dir)
 
 
 def test_prepare_run_refuses_existing_directory_without_resume(tmp_path):
-    run_dir = tmp_path / "existing"
-    run_dir.mkdir()
+    run_dir = tmp_path / "tests" / "existing"
+    run_dir.mkdir(parents=True)
 
     with pytest.raises(FileExistsError, match="already exists"):
-        prepare_run(RunConfig(run_dir=run_dir, device="cpu"))
+        prepare_run(
+            RunConfig(
+                run_root=tmp_path,
+                experiment_name="tests",
+                run_name="existing",
+                device="cpu",
+            )
+        )
+
+
+def test_resume_requires_explicit_run_name(tmp_path):
+    with pytest.raises(ValueError, match="requires an explicit run.name"):
+        prepare_run(RunConfig(run_root=tmp_path, resume=True, device="cpu"))
 
 
 def _create_completed_iteration(run_dir: Path, iteration: int) -> None:
@@ -77,35 +115,47 @@ def _create_completed_iteration(run_dir: Path, iteration: int) -> None:
 
 
 def test_prepare_run_resumes_after_latest_complete_iteration(tmp_path):
-    run_dir = tmp_path / "resume"
-    prepare_run(RunConfig(run_dir=run_dir, device="cpu", num_iterations=3))
+    run_dir = tmp_path / "tests" / "resume"
+    base_config = RunConfig(
+        run_root=tmp_path,
+        experiment_name="tests",
+        run_name="resume",
+        device="cpu",
+        num_iterations=3,
+    )
+    prepare_run(base_config)
     _create_completed_iteration(run_dir, 0)
     _create_completed_iteration(run_dir, 1)
 
-    state = prepare_run(
-        RunConfig(run_dir=run_dir, resume=True, device="cpu", num_iterations=3)
-    )
+    state = prepare_run(replace(base_config, resume=True))
 
     assert state.start_iteration == 2
     assert state.checkpoint_path == run_dir / "checkpoints/checkpoint_iter_1.pt"
 
 
 def test_prepare_run_refuses_ambiguous_partial_iteration(tmp_path):
-    run_dir = tmp_path / "partial"
-    prepare_run(RunConfig(run_dir=run_dir, device="cpu", num_iterations=2))
+    run_dir = tmp_path / "tests" / "partial"
+    base_config = RunConfig(
+        run_root=tmp_path,
+        experiment_name="tests",
+        run_name="partial",
+        device="cpu",
+        num_iterations=2,
+    )
+    prepare_run(base_config)
     _create_completed_iteration(run_dir, 0)
     (run_dir / "data/selfplay_iter_1").mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="ambiguous partial data"):
-        prepare_run(
-            RunConfig(run_dir=run_dir, resume=True, device="cpu", num_iterations=2)
-        )
+        prepare_run(replace(base_config, resume=True))
 
 
 def test_hydra_config_maps_training_options():
     config = compose_run_config(
         [
-            "run.dir=example-run",
+            "run.root=example-root",
+            "run.experiment_name=quality-study",
+            "run.name=sim400-seed0",
             "run.num_iterations=2",
             "run.seed=123",
             "selfplay.games_per_iteration=16",
@@ -127,7 +177,9 @@ def test_hydra_config_maps_training_options():
         ]
     )
 
-    assert config.run_dir == Path("example-run")
+    assert config.run_root == Path("example-root")
+    assert config.experiment_name == "quality-study"
+    assert config.run_name == "sim400-seed0"
     assert config.num_iterations == 2
     assert config.seed == 123
     assert config.selfplay_games_per_iter == 16
@@ -152,6 +204,34 @@ def test_hydra_training_epochs_default_to_one():
     assert compose_run_config([]).train_num_epochs == 1
 
 
+def test_hydra_run_root_defaults_from_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("REVERSI_ZERO_RUN_ROOT", str(tmp_path))
+
+    assert compose_run_config([]).run_root == tmp_path
+
+
+def test_dotenv_supplies_defaults_without_overriding_process_environment(
+    tmp_path, monkeypatch
+):
+    dotenv_path = tmp_path / ".env"
+    dotenv_root = tmp_path / "from-dotenv"
+    dotenv_path.write_text(
+        f"REVERSI_ZERO_RUN_ROOT={dotenv_root}\n"
+        "MLFLOW_TRACKING_URI=http://from-dotenv:5000\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("REVERSI_ZERO_RUN_ROOT", raising=False)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://from-process:5000")
+
+    try:
+        assert load_repository_dotenv(dotenv_path)
+        config = compose_run_config([])
+        assert config.run_root == dotenv_root
+        assert config.logging.mlflow.tracking_uri == "http://from-process:5000"
+    finally:
+        os.environ.pop("REVERSI_ZERO_RUN_ROOT", None)
+
+
 def test_hydra_learning_rate_schedule_defaults_to_wsd():
     assert compose_run_config([]).train_lr_schedule == "wsd"
 
@@ -161,6 +241,46 @@ def test_hydra_selfplay_simulations_default_to_400():
 
     assert config.selfplay_num_simulations == 400
     assert config.resolved_promotion_mcts_sims() == 400
+
+
+def test_hydra_selects_multiple_logging_backends(tmp_path, monkeypatch):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://mlflow.example:5000")
+    config = compose_run_config(
+        [
+            f"run.root={tmp_path}",
+            "run.experiment_name=quality-study",
+            "run.name=experiment-1",
+            "logging.backends=[console,mlflow]",
+            "logging.console.verbose=false",
+            "+logging.mlflow.tags.purpose=comparison",
+        ]
+    )
+
+    assert config.logging.backends == ("console", "mlflow")
+    assert not config.logging.console.verbose
+    assert config.experiment_name == "quality-study"
+    assert config.run_name == "experiment-1"
+    assert config.logging.mlflow.tracking_uri == "http://mlflow.example:5000"
+    assert config.logging.mlflow.tags == {"purpose": "comparison"}
+
+    run_dir = run_dir_for_config(config)
+    logging_config = logging_config_for_run(config, run_dir)
+    assert list(logging_config.backends) == [LoggerKind.CONSOLE, LoggerKind.MLFLOW]
+    mlflow_config = logging_config.backends[LoggerKind.MLFLOW]
+    assert isinstance(mlflow_config, MLflowConfig)
+    assert mlflow_config.tracking_uri == "http://mlflow.example:5000"
+    assert mlflow_config.artifact_location is None
+    assert mlflow_config.experiment_name == "quality-study"
+    assert mlflow_config.run_name == "experiment-1"
+    assert mlflow_config.tags["purpose"] == "comparison"
+
+
+def test_mlflow_requires_remote_tracking_uri(monkeypatch, tmp_path):
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    config = compose_run_config(["logging.backends=[mlflow]"])
+
+    with pytest.raises(ValueError, match="MLflow requires a remote tracking URI"):
+        logging_config_for_run(config, tmp_path / "experiment-1")
 
 
 def test_training_dtype_auto_uses_float32_on_cpu():

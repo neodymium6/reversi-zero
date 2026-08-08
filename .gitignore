@@ -4,6 +4,7 @@ target/
 /models/
 /trainer/runs/
 .envrc
+.env
 *.npy
 *.pt
 *.
