@@ -52,7 +52,7 @@ def test_prepare_run_creates_new_isolated_directory(tmp_path):
     assert stored["reference_games"] == 40
     assert stored["promotion_enabled"] is True
     assert stored["promotion_num_openings"] == 80
-    assert stored["promotion_mcts_sims"] == 200
+    assert stored["promotion_mcts_sims"] == 400
     assert stored["promotion_expansion_batch_size"] == 4
     assert stored["promotion_require_confidence"] is False
     assert stored["inference_dtype"] == "float32"
@@ -156,11 +156,11 @@ def test_hydra_learning_rate_schedule_defaults_to_wsd():
     assert compose_run_config([]).train_lr_schedule == "wsd"
 
 
-def test_hydra_selfplay_simulations_default_to_200():
+def test_hydra_selfplay_simulations_default_to_400():
     config = compose_run_config([])
 
-    assert config.selfplay_num_simulations == 200
-    assert config.resolved_promotion_mcts_sims() == 200
+    assert config.selfplay_num_simulations == 400
+    assert config.resolved_promotion_mcts_sims() == 400
 
 
 def test_training_dtype_auto_uses_float32_on_cpu():

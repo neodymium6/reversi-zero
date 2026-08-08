@@ -62,7 +62,7 @@ class RunConfig:
     selfplay_batch_size: int | None = None
     selfplay_game_concurrency: int | None = None
     selfplay_batch_timeout_ms: int = 1
-    selfplay_num_simulations: int = 200
+    selfplay_num_simulations: int = 400
     selfplay_expansion_batch_size: int = 4
     selfplay_c_puct: float = 3.0
     inference_dtype: Literal["auto", "float32", "float16"] = "auto"

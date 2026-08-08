@@ -211,7 +211,7 @@ Key parameters in `train_main.py`:
 selfplay_games_per_iter = 512 * factor    # Games per iteration
 selfplay_batch_size = 32                   # CPU default; 128 on CUDA
 selfplay_game_concurrency = 16             # CPU maximum; 32 on CUDA
-selfplay_num_simulations = 200             # MCTS simulations per move
+selfplay_num_simulations = 400             # MCTS simulations per move
 torch_threads = 4                          # CPU default; unchanged on CUDA
 
 # MCTS configuration

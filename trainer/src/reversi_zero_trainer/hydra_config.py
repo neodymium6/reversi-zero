@@ -67,7 +67,7 @@ class SelfPlaySettings:
     batch_size: int | None = None
     game_concurrency: int | None = None
     batch_timeout_ms: int = 1
-    simulations: int = 200
+    simulations: int = 400
     expansion_batch_size: int = 4
     c_puct: float = 3.0
 
