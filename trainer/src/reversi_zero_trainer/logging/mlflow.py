@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mlflow import MlflowClient
-from mlflow.entities import Metric, Param
+from mlflow.entities import Metric, Param, RunTag
 
 from .base import BaseLogger, register_logger
 from .config import BaseLoggerConfig, LoggerKind, MLflowConfig
@@ -32,22 +32,56 @@ class MLflowLogger(BaseLogger):
             )
         self.cfg = cfg
         self.client = MlflowClient(tracking_uri=cfg.tracking_uri)
-        experiment = self.client.get_experiment_by_name(cfg.experiment_name)
-        experiment_id = (
-            self.client.create_experiment(
-                cfg.experiment_name,
-                artifact_location=cfg.artifact_location,
+        if cfg.run_id is None:
+            experiment = self.client.get_experiment_by_name(cfg.experiment_name)
+            experiment_id = (
+                self.client.create_experiment(
+                    cfg.experiment_name,
+                    artifact_location=cfg.artifact_location,
+                )
+                if experiment is None
+                else experiment.experiment_id
             )
-            if experiment is None
-            else experiment.experiment_id
-        )
-        run = self.client.create_run(
-            experiment_id=experiment_id,
-            run_name=cfg.run_name,
-            tags=cfg.tags,
-        )
-        self.run_id = run.info.run_id
+            run = self.client.create_run(
+                experiment_id=experiment_id,
+                run_name=cfg.run_name,
+                tags=cfg.tags,
+            )
+            self.run_id = run.info.run_id
+            self._persist_run_id()
+        else:
+            run = self.client.get_run(cfg.run_id)
+            experiment = self.client.get_experiment(run.info.experiment_id)
+            if experiment.name != cfg.experiment_name:
+                raise ValueError(
+                    "MLflow run belongs to a different experiment: "
+                    f"expected={cfg.experiment_name!r}, actual={experiment.name!r}"
+                )
+            self.run_id = cfg.run_id
+            self.client.set_terminated(self.run_id, status="RUNNING")
+            self.client.log_batch(
+                self.run_id,
+                tags=[RunTag(key, value) for key, value in cfg.tags.items()],
+            )
         self._finished = False
+
+    def _persist_run_id(self) -> None:
+        path = self.cfg.run_id_path
+        if path is None:
+            return
+        if path.exists():
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing != self.run_id:
+                raise RuntimeError(
+                    f"Refusing to overwrite a different MLflow run ID: {path}"
+                )
+            return
+        next_path = path.with_name(f".{path.name}.next")
+        try:
+            next_path.write_text(f"{self.run_id}\n", encoding="utf-8")
+            next_path.replace(path)
+        finally:
+            next_path.unlink(missing_ok=True)
 
     def log_metric(
         self, name: str, value: float, step: int | None = None, color: str | None = None
@@ -97,7 +131,13 @@ class MLflowLogger(BaseLogger):
         )
 
     def finish(self) -> None:
+        self._terminate("FINISHED")
+
+    def fail(self) -> None:
+        self._terminate("FAILED")
+
+    def _terminate(self, status: str) -> None:
         if self._finished:
             return
-        self.client.set_terminated(self.run_id, status="FINISHED")
+        self.client.set_terminated(self.run_id, status=status)
         self._finished = True

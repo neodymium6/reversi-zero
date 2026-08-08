@@ -12,7 +12,6 @@ from ..training import TrainingConfig
 def log_selfplay_stats(
     logger: BaseLogger,
     stats: SelfPlayStats,
-    iteration: int,
     step: int,
 ) -> None:
     """Log self-play statistics.
@@ -20,10 +19,9 @@ def log_selfplay_stats(
     Args:
         logger: Logger instance
         stats: Self-play statistics
-        iteration: Current iteration number
-        step: Global step counter
+        step: Position in the self-play report series
     """
-    prefix = f"iter_{iteration}/selfplay"
+    prefix = "selfplay"
 
     metrics: dict[str, float] = {}
     for attr_name in dir(stats):
@@ -38,7 +36,6 @@ def log_selfplay_stats(
 def log_training_metrics(
     logger: BaseLogger,
     metrics: dict[str, Any],
-    iteration: int,
     step: int,
 ) -> None:
     """Log training metrics.
@@ -46,10 +43,9 @@ def log_training_metrics(
     Args:
         logger: Logger instance
         metrics: Training metrics dictionary (contains all metrics from trainer)
-        iteration: Current iteration number
-        step: Global step counter
+        step: Position in the training epoch series
     """
-    prefix = f"iter_{iteration}"
+    prefix = "train"
 
     logger.log_metrics(
         {
@@ -65,7 +61,6 @@ def log_promotion_metrics(
     logger: BaseLogger,
     report: dict[str, Any],
     accepted: bool,
-    iteration: int,
     step: int,
 ) -> None:
     """Log candidate-vs-incumbent promotion results."""
@@ -81,10 +76,7 @@ def log_promotion_metrics(
         "accepted": float(accepted),
     }
     logger.log_metrics(
-        {
-            f"iter_{iteration}/promotion/{name}": float(value)
-            for name, value in metrics.items()
-        },
+        {f"promotion/{name}": float(value) for name, value in metrics.items()},
         step=step,
         color="green",
     )
@@ -94,7 +86,6 @@ def log_reference_metrics(
     logger: BaseLogger,
     opponent: str,
     report: dict[str, Any],
-    iteration: int,
     step: int,
 ) -> None:
     """Log paired incumbent-vs-reference evaluation results."""
@@ -110,7 +101,7 @@ def log_reference_metrics(
     }
     logger.log_metrics(
         {
-            f"iter_{iteration}/reference/{opponent}/{name}": float(value)
+            f"reference/{opponent}/{name}": float(value)
             for name, value in metrics.items()
         },
         step=step,

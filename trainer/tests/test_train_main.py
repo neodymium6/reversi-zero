@@ -273,6 +273,16 @@ def test_hydra_selects_multiple_logging_backends(tmp_path, monkeypatch):
     assert mlflow_config.experiment_name == "quality-study"
     assert mlflow_config.run_name == "experiment-1"
     assert mlflow_config.tags["purpose"] == "comparison"
+    assert mlflow_config.run_id is None
+    assert mlflow_config.run_id_path == run_dir / "mlflow_run_id"
+
+    run_dir.mkdir(parents=True)
+    mlflow_config.run_id_path.write_text("existing-run-id\n", encoding="utf-8")
+    resumed_logging = logging_config_for_run(replace(config, resume=True), run_dir)
+    resumed_mlflow = resumed_logging.backends[LoggerKind.MLFLOW]
+    assert isinstance(resumed_mlflow, MLflowConfig)
+    assert resumed_mlflow.run_id == "existing-run-id"
+    assert resumed_mlflow.tags["reversi_zero.resume"] == "true"
 
 
 def test_mlflow_requires_remote_tracking_uri(monkeypatch, tmp_path):

@@ -3,6 +3,7 @@
 from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 
 class LoggerKind(str, Enum):
@@ -42,6 +43,8 @@ class MLflowConfig(BaseLoggerConfig):
     experiment_name: str = "reversi-zero"
     run_name: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
+    run_id: str | None = None
+    run_id_path: Path | None = None
 
 
 @dataclass

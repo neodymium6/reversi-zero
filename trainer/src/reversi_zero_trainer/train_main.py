@@ -767,12 +767,21 @@ def logging_config_for_run(config: RunConfig, run_dir: Path) -> LoggingConfig:
         tags = dict(mlflow.tags)
         tags.setdefault("reversi_zero.run_dir", str(run_dir))
         tags.setdefault("reversi_zero.resume", str(config.resume).lower())
+        tags.setdefault("reversi_zero.target_iterations", str(config.num_iterations))
+        run_id_path = run_dir / "mlflow_run_id"
+        run_id = None
+        if run_id_path.is_file():
+            run_id = run_id_path.read_text(encoding="utf-8").strip()
+            if not run_id:
+                raise RuntimeError(f"MLflow run ID file is empty: {run_id_path}")
         backends[LoggerKind.MLFLOW] = MLflowConfig(
             tracking_uri=tracking_uri,
             artifact_location=mlflow.artifact_location,
             experiment_name=config.experiment_name,
             run_name=run_dir.name,
             tags=tags,
+            run_id=run_id,
+            run_id_path=run_id_path,
         )
 
     return LoggingConfig(backends=backends)
@@ -845,60 +854,57 @@ def run_training(config: RunConfig) -> None:
     logging_cfg = logging_config_for_run(config, run_dir)
 
     with create_logger(logging_cfg) as logger:
-        log_hyperparameters(
-            logger=logger,
-            num_iterations=config.num_iterations,
-            seed=config.seed,
-            replay_window=config.train_replay_window,
-            selfplay_config={
-                "games_per_iter": config.selfplay_games_per_iter,
-                "report_interval": config.report_interval(),
-                "batch_size": selfplay_batch_size,
-                "game_concurrency": selfplay_game_concurrency,
-                "batch_timeout_ms": config.selfplay_batch_timeout_ms,
-                "expansion_batch_size": config.selfplay_expansion_batch_size,
-                "torch_threads": torch_threads,
-                "num_simulations": config.selfplay_num_simulations,
-                "inference_dtype": inference_dtype,
-            },
-            train_config=train_config,
-            model_config={
-                "type": config.model_type,
-                "channels": config.model_channels,
-                "num_blocks": config.model_num_blocks,
-            },
-            reference_config={
-                "enabled": config.reference_eval_enabled,
-                "games": config.reference_games,
-            },
-            promotion_config={
-                "enabled": config.promotion_enabled,
-                "num_openings": config.promotion_num_openings,
-                "opening_plies": config.promotion_opening_plies,
-                "mcts_sims": config.resolved_promotion_mcts_sims(),
-                "c_puct": config.promotion_c_puct,
-                "expansion_batch_size": (
-                    config.resolved_promotion_expansion_batch_size()
-                ),
-                "threshold": config.promotion_threshold,
-                "require_confidence": config.promotion_require_confidence,
-            },
-            paths={
-                "run_dir": run_dir,
-                "data_base_dir": data_base_dir,
-                "models_dir": models_dir,
-                "checkpoint_dir": checkpoints_dir,
-            },
-            device=device,
-        )
+        if state.start_iteration == 0:
+            log_hyperparameters(
+                logger=logger,
+                num_iterations=config.num_iterations,
+                seed=config.seed,
+                replay_window=config.train_replay_window,
+                selfplay_config={
+                    "games_per_iter": config.selfplay_games_per_iter,
+                    "report_interval": config.report_interval(),
+                    "batch_size": selfplay_batch_size,
+                    "game_concurrency": selfplay_game_concurrency,
+                    "batch_timeout_ms": config.selfplay_batch_timeout_ms,
+                    "expansion_batch_size": config.selfplay_expansion_batch_size,
+                    "torch_threads": torch_threads,
+                    "num_simulations": config.selfplay_num_simulations,
+                    "inference_dtype": inference_dtype,
+                },
+                train_config=train_config,
+                model_config={
+                    "type": config.model_type,
+                    "channels": config.model_channels,
+                    "num_blocks": config.model_num_blocks,
+                },
+                reference_config={
+                    "enabled": config.reference_eval_enabled,
+                    "games": config.reference_games,
+                },
+                promotion_config={
+                    "enabled": config.promotion_enabled,
+                    "num_openings": config.promotion_num_openings,
+                    "opening_plies": config.promotion_opening_plies,
+                    "mcts_sims": config.resolved_promotion_mcts_sims(),
+                    "c_puct": config.promotion_c_puct,
+                    "expansion_batch_size": (
+                        config.resolved_promotion_expansion_batch_size()
+                    ),
+                    "threshold": config.promotion_threshold,
+                    "require_confidence": config.promotion_require_confidence,
+                },
+                paths={
+                    "run_dir": run_dir,
+                    "data_base_dir": data_base_dir,
+                    "models_dir": models_dir,
+                    "checkpoint_dir": checkpoints_dir,
+                },
+                device=device,
+            )
 
-        steps_per_iteration = (
-            math.ceil(config.selfplay_games_per_iter / config.report_interval())
-            + config.train_num_epochs
-            + int(config.promotion_enabled)
-            + int(config.reference_eval_enabled)
+        selfplay_reports_per_iteration = math.ceil(
+            config.selfplay_games_per_iter / config.report_interval()
         )
-        global_step = state.start_iteration * steps_per_iteration
 
         for iteration in range(state.start_iteration, config.num_iterations):
             current_model_path = models_dir / f"model_iter_{iteration}.pt"
@@ -926,24 +932,28 @@ def run_training(config: RunConfig) -> None:
                 save_dir=str(selfplay_data_dir),
             )
 
-            for stats in stream:
-                log_selfplay_stats(logger, stats, iteration, global_step)
-                global_step += 1
+            for report_index, stats in enumerate(stream):
+                selfplay_step = (
+                    iteration * selfplay_reports_per_iteration + report_index
+                )
+                log_selfplay_stats(logger, stats, selfplay_step)
 
             incumbent_snapshot = (
                 capture_trainer_snapshot(trainer) if config.promotion_enabled else None
             )
-            for epoch_metrics in trainer.train(
-                data_path=replay_data_paths(
-                    data_base_dir,
-                    iteration,
-                    config.train_replay_window,
-                ),
-                num_epochs=train_config.num_epochs,
-                schedule_iteration=iteration,
+            for epoch_index, epoch_metrics in enumerate(
+                trainer.train(
+                    data_path=replay_data_paths(
+                        data_base_dir,
+                        iteration,
+                        config.train_replay_window,
+                    ),
+                    num_epochs=train_config.num_epochs,
+                    schedule_iteration=iteration,
+                )
             ):
-                log_training_metrics(logger, epoch_metrics, iteration, global_step)
-                global_step += 1
+                training_step = iteration * config.train_num_epochs + epoch_index
+                log_training_metrics(logger, epoch_metrics, training_step)
 
             next_model_path = models_dir / f"model_iter_{iteration + 1}.pt"
             if config.promotion_enabled:
@@ -977,10 +987,8 @@ def run_training(config: RunConfig) -> None:
                     logger,
                     report,
                     accepted=accepted,
-                    iteration=iteration,
-                    step=global_step,
+                    step=iteration,
                 )
-                global_step += 1
                 logger.log_artifact("promotion evaluation", str(report_path))
                 checkpoint_path = finalize_candidate(
                     trainer=trainer,
@@ -1026,10 +1034,8 @@ def run_training(config: RunConfig) -> None:
                     logger,
                     opponent="bitmatrix",
                     report=reference_report,
-                    iteration=iteration,
-                    step=global_step,
+                    step=iteration,
                 )
-                global_step += 1
                 logger.log_artifact(
                     "bitmatrix reference evaluation",
                     str(reference_path),

@@ -10,6 +10,7 @@ from reversi_zero_trainer.logging import (
     LoggingConfig,
     MLflowConfig,
     create_logger,
+    log_training_metrics,
 )
 
 
@@ -22,6 +23,23 @@ def test_console_logger_creation():
     )
     logger = create_logger(config)
     assert isinstance(logger, BaseLogger)
+
+
+def test_training_metric_names_are_stable_across_iterations():
+    from unittest.mock import Mock
+
+    logger = Mock(spec=BaseLogger)
+    log_training_metrics(
+        logger,
+        {"loss/total": 2.5, "eval/value_mae": 0.4},
+        step=7,
+    )
+
+    logger.log_metrics.assert_called_once_with(
+        {"train/loss/total": 2.5, "train/eval/value_mae": 0.4},
+        step=7,
+        color="cyan",
+    )
 
 
 def test_console_logger_log_metric(capsys):
@@ -190,6 +208,71 @@ def test_mlflow_logger_rejects_wrong_config_type():
 
     with pytest.raises(TypeError, match="MLflowLogger requires MLflowConfig"):
         MLflowLogger(ConsoleConfig())
+
+
+def test_mlflow_logger_resumes_the_same_run(tmp_path):
+    from mlflow import MlflowClient
+
+    tracking_uri = f"sqlite:///{tmp_path / 'resume.db'}"
+    artifact_location = (tmp_path / "resume-artifacts").as_uri()
+    run_id_path = tmp_path / "mlflow_run_id"
+    initial = MLflowConfig(
+        tracking_uri=tracking_uri,
+        artifact_location=artifact_location,
+        experiment_name="resume-test",
+        run_name="one-run",
+        run_id_path=run_id_path,
+    )
+
+    with create_logger(LoggingConfig(backends={LoggerKind.MLFLOW: initial})) as logger:
+        logger.log_metrics({"train/loss/total": 2.0}, step=0)
+
+    run_id = run_id_path.read_text(encoding="utf-8").strip()
+    resumed = MLflowConfig(
+        tracking_uri=tracking_uri,
+        experiment_name="resume-test",
+        run_name="one-run",
+        tags={"reversi_zero.resume": "true"},
+        run_id=run_id,
+        run_id_path=run_id_path,
+    )
+    with create_logger(LoggingConfig(backends={LoggerKind.MLFLOW: resumed})) as logger:
+        logger.log_metrics({"train/loss/total": 1.0}, step=1)
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name("resume-test")
+    assert experiment is not None
+    runs = client.search_runs([experiment.experiment_id])
+    assert [run.info.run_id for run in runs] == [run_id]
+    assert runs[0].info.status == "FINISHED"
+    assert runs[0].data.tags["reversi_zero.resume"] == "true"
+    history = client.get_metric_history(run_id, "train/loss/total")
+    assert [(metric.step, metric.value) for metric in history] == [(0, 2.0), (1, 1.0)]
+
+
+def test_mlflow_logger_marks_failed_context(tmp_path):
+    from mlflow import MlflowClient
+
+    tracking_uri = f"sqlite:///{tmp_path / 'failure.db'}"
+    config = MLflowConfig(
+        tracking_uri=tracking_uri,
+        artifact_location=(tmp_path / "failure-artifacts").as_uri(),
+        experiment_name="failure-test",
+    )
+
+    with pytest.raises(RuntimeError, match="training failed"):
+        with create_logger(
+            LoggingConfig(backends={LoggerKind.MLFLOW: config})
+        ) as logger:
+            logger.log_metrics({"train/loss/total": 2.0}, step=0)
+            raise RuntimeError("training failed")
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment = client.get_experiment_by_name("failure-test")
+    assert experiment is not None
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 1
+    assert runs[0].info.status == "FAILED"
 
 
 def test_create_logger_unknown_backend():

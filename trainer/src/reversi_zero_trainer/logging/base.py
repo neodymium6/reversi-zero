@@ -103,13 +103,20 @@ class BaseLogger(ABC):
         """Finish logging and clean up resources."""
         pass
 
+    def fail(self) -> None:
+        """Mark logging as failed and clean up resources."""
+        self.finish()
+
     def __enter__(self) -> "BaseLogger":
         """Enter context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
         """Exit context manager and clean up."""
-        self.finish()
+        if exc_type is None:
+            self.finish()
+        else:
+            self.fail()
 
 
 class ListLogger(BaseLogger):
@@ -163,6 +170,11 @@ class ListLogger(BaseLogger):
         """Finish all backends."""
         for backend in self.backends:
             backend.finish()
+
+    def fail(self) -> None:
+        """Mark all backends as failed."""
+        for backend in self.backends:
+            backend.fail()
 
 
 def create_logger(cfg: LoggingConfig) -> BaseLogger:
