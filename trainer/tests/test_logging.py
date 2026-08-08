@@ -184,9 +184,9 @@ def test_console_and_mlflow_log_simultaneously(tmp_path, monkeypatch):
         logger.log_metrics({"loss": 0.25, "accuracy": 0.75}, step=3)
         logger.log_artifact("checkpoint", str(artifact))
 
-        assert len(batch_calls) == 2
-        assert len(batch_calls[0][1]["params"]) == 2
-        assert len(batch_calls[1][1]["metrics"]) == 2
+    assert len(batch_calls) == 2
+    assert len(batch_calls[0][1]["params"]) == 2
+    assert len(batch_calls[1][1]["metrics"]) == 2
 
     client = MlflowClient(tracking_uri=tracking_uri)
     experiment = client.get_experiment_by_name("multi-backend-test")
@@ -201,6 +201,79 @@ def test_console_and_mlflow_log_simultaneously(tmp_path, monkeypatch):
     assert run.data.metrics["accuracy"] == pytest.approx(0.75)
     artifacts = client.list_artifacts(run.info.run_id, "checkpoint")
     assert [item.path for item in artifacts] == ["checkpoint/checkpoint.pt"]
+
+
+def test_mlflow_logger_queues_remote_calls_without_blocking(tmp_path, monkeypatch):
+    from threading import Event
+
+    from reversi_zero_trainer.logging.mlflow import MLflowLogger
+
+    tracking_uri = f"sqlite:///{tmp_path / 'async.db'}"
+    artifact = tmp_path / "checkpoint.pt"
+    artifact.write_bytes(b"checkpoint")
+    config = MLflowConfig(
+        tracking_uri=tracking_uri,
+        artifact_location=(tmp_path / "async-artifacts").as_uri(),
+        experiment_name="async-test",
+    )
+    logger = MLflowLogger(config)
+    started = Event()
+    release = Event()
+    calls = []
+    original_log_artifact = logger.client.log_artifact
+    original_log_batch = logger.client.log_batch
+
+    def blocking_log_artifact(*args, **kwargs):
+        calls.append("artifact")
+        started.set()
+        if not release.wait(timeout=1):
+            raise AssertionError("artifact logging blocked the caller")
+        return original_log_artifact(*args, **kwargs)
+
+    def record_log_batch(*args, **kwargs):
+        calls.append("metrics")
+        return original_log_batch(*args, **kwargs)
+
+    monkeypatch.setattr(logger.client, "log_artifact", blocking_log_artifact)
+    monkeypatch.setattr(logger.client, "log_batch", record_log_batch)
+
+    logger.log_artifact("checkpoint", str(artifact))
+    assert started.wait(timeout=1)
+    logger.log_metrics({"loss": 0.25}, step=0)
+    release.set()
+    logger.finish()
+
+    assert calls == ["artifact", "metrics"]
+
+
+def test_mlflow_logger_reports_background_failure(tmp_path, monkeypatch):
+    from mlflow import MlflowClient
+
+    from reversi_zero_trainer.logging.mlflow import MLflowLogger
+
+    tracking_uri = f"sqlite:///{tmp_path / 'async-failure.db'}"
+    artifact = tmp_path / "checkpoint.pt"
+    artifact.write_bytes(b"checkpoint")
+    config = MLflowConfig(
+        tracking_uri=tracking_uri,
+        artifact_location=(tmp_path / "async-failure-artifacts").as_uri(),
+        experiment_name="async-failure-test",
+    )
+    logger = MLflowLogger(config)
+
+    def fail_log_artifact(*args, **kwargs):
+        raise OSError("upload failed")
+
+    monkeypatch.setattr(logger.client, "log_artifact", fail_log_artifact)
+    logger.log_artifact("checkpoint", str(artifact))
+
+    with pytest.raises(RuntimeError, match="background logging failed") as error:
+        logger.finish()
+    assert isinstance(error.value.__cause__, OSError)
+
+    client = MlflowClient(tracking_uri=tracking_uri)
+    run = client.get_run(logger.run_id)
+    assert run.info.status == "FAILED"
 
 
 def test_mlflow_logger_rejects_wrong_config_type():

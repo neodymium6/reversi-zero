@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from queue import Queue
+from threading import Lock, Thread
 from typing import Any
 
 from mlflow import MlflowClient
@@ -23,7 +25,7 @@ def _artifact_directory(name: str) -> str:
 
 @register_logger(LoggerKind.MLFLOW)
 class MLflowLogger(BaseLogger):
-    """Log metrics, parameters, and artifacts through ``MlflowClient``."""
+    """Log to MLflow without blocking training on remote requests."""
 
     def __init__(self, cfg: BaseLoggerConfig) -> None:
         if not isinstance(cfg, MLflowConfig):
@@ -63,7 +65,45 @@ class MLflowLogger(BaseLogger):
                 self.run_id,
                 tags=[RunTag(key, value) for key, value in cfg.tags.items()],
             )
+        self._queue: Queue[Callable[[], None] | None] = Queue()
+        self._state_lock = Lock()
+        self._worker_error: BaseException | None = None
         self._finished = False
+        self._worker = Thread(
+            target=self._run_worker,
+            name=f"mlflow-logger-{self.run_id[:8]}",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_worker(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                if job is None:
+                    return
+                with self._state_lock:
+                    failed = self._worker_error is not None
+                if failed:
+                    continue
+                try:
+                    job()
+                except BaseException as error:
+                    with self._state_lock:
+                        if self._worker_error is None:
+                            self._worker_error = error
+            finally:
+                self._queue.task_done()
+
+    def _enqueue(self, job: Callable[[], None]) -> None:
+        with self._state_lock:
+            if self._finished:
+                raise RuntimeError("Cannot log to a finished MLflow run")
+            error = self._worker_error
+            if error is None:
+                self._queue.put(job)
+        if error is not None:
+            raise RuntimeError("MLflow background logging failed") from error
 
     def _persist_run_id(self) -> None:
         path = self.cfg.run_id_path
@@ -102,21 +142,17 @@ class MLflowLogger(BaseLogger):
             return
         timestamp = int(time.time() * 1000)
         resolved_step = 0 if step is None else step
-        self.client.log_batch(
-            self.run_id,
-            metrics=[
-                Metric(name, float(value), timestamp, resolved_step)
-                for name, value in metrics.items()
-            ],
-        )
+        batch = [
+            Metric(name, float(value), timestamp, resolved_step)
+            for name, value in metrics.items()
+        ]
+        self._enqueue(lambda: self.client.log_batch(self.run_id, metrics=batch))
 
     def log_params(self, params: Mapping[str, Any]) -> None:
         if not params:
             return
-        self.client.log_batch(
-            self.run_id,
-            params=[Param(key, str(value)) for key, value in params.items()],
-        )
+        batch = [Param(key, str(value)) for key, value in params.items()]
+        self._enqueue(lambda: self.client.log_batch(self.run_id, params=batch))
 
     def log_artifact(self, name: str, path: str) -> None:
         artifact = Path(path)
@@ -124,10 +160,14 @@ class MLflowLogger(BaseLogger):
             raise FileNotFoundError(
                 f"Artifact does not exist or is not a file: {artifact}"
             )
-        self.client.log_artifact(
-            self.run_id,
-            str(artifact),
-            artifact_path=_artifact_directory(name),
+        artifact = artifact.resolve()
+        artifact_path = _artifact_directory(name)
+        self._enqueue(
+            lambda: self.client.log_artifact(
+                self.run_id,
+                str(artifact),
+                artifact_path=artifact_path,
+            )
         )
 
     def finish(self) -> None:
@@ -137,7 +177,26 @@ class MLflowLogger(BaseLogger):
         self._terminate("FAILED")
 
     def _terminate(self, status: str) -> None:
-        if self._finished:
-            return
-        self.client.set_terminated(self.run_id, status=status)
-        self._finished = True
+        with self._state_lock:
+            if self._finished:
+                error = self._worker_error
+                if error is not None:
+                    raise RuntimeError("MLflow background logging failed") from error
+                return
+            self._finished = True
+
+        self._queue.put(None)
+        self._queue.join()
+        self._worker.join()
+
+        with self._state_lock:
+            error = self._worker_error
+        final_status = "FAILED" if error is not None else status
+        try:
+            self.client.set_terminated(self.run_id, status=final_status)
+        except BaseException as termination_error:
+            if error is None:
+                error = termination_error
+
+        if error is not None:
+            raise RuntimeError("MLflow background logging failed") from error
